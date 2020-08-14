@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 
-# Copyright 2015-2019 Mike Fährmann
+# Copyright 2015-2020 Mike Fährmann
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
 # published by the Free Software Foundation.
 
-"""Extract images from https://imgur.com/"""
+"""Extractors for https://imgur.com/"""
 
 from .common import Extractor, Message
 from .. import text, exception
@@ -34,7 +34,11 @@ class ImgurExtractor(Extractor):
         except KeyError:
             pass
 
-        url = image["mp4"] if image["animated"] and self.mp4 else image["link"]
+        if image["animated"] and self.mp4 and "mp4" in image:
+            url = image["mp4"]
+        else:
+            url = image["link"]
+
         image["date"] = text.parse_timestamp(image["datetime"])
         text.nameext_from_url(url, image)
 
@@ -65,7 +69,7 @@ class ImgurImageExtractor(ImgurExtractor):
                 "account_url"  : None,
                 "animated"     : False,
                 "bandwidth"    : int,
-                "date"         : "type:datetime",
+                "date"         : "dt:2016-11-10 14:24:35",
                 "datetime"     : 1478787875,
                 "description"  : None,
                 "edited"       : "0",
@@ -100,6 +104,9 @@ class ImgurImageExtractor(ImgurExtractor):
         ("https://imgur.com/HjoXJAd", {  # url ends with '.jpg?1'
             "url": "ec2cf11a2bfb4939feff374781a6e6f3e9af8e8e",
         }),
+        ("https://imgur.com/1Nily2P", {  # animated png
+            "pattern": "https://i.imgur.com/1Nily2P.png",
+        }),
         ("https://imgur.com/zzzzzzz", {  # not found
             "exception": exception.HttpError,
         }),
@@ -130,7 +137,7 @@ class ImgurAlbumExtractor(ImgurExtractor):
     directory_fmt = ("{category}", "{album[id]}{album[title]:? - //}")
     filename_fmt = "{category}_{album[id]}_{num:>03}_{id}.{extension}"
     archive_fmt = "{album[id]}_{id}"
-    pattern = BASE_PATTERN + r"/(?:a|t/unmuted)/(\w{7}|\w{5})"
+    pattern = BASE_PATTERN + r"/a/(\w{7}|\w{5})"
     test = (
         ("https://imgur.com/a/TcBmP", {
             "url": "ce3552f550a5b5316bd9c7ae02e21e39f30c0563",
@@ -142,7 +149,7 @@ class ImgurAlbumExtractor(ImgurExtractor):
                     "cover_edited": None,
                     "cover_height": 1400,
                     "cover_width" : 951,
-                    "date"        : "type:datetime",
+                    "date"        : "dt:2015-10-09 10:37:50",
                     "datetime"    : 1444387070,
                     "description" : None,
                     "favorite"    : False,
@@ -153,7 +160,7 @@ class ImgurAlbumExtractor(ImgurExtractor):
                     "is_album"    : True,
                     "layout"      : "blog",
                     "link"        : "https://imgur.com/a/TcBmP",
-                    "nsfw"        : False,
+                    "nsfw"        : bool,
                     "privacy"     : "hidden",
                     "section"     : None,
                     "title"       : "138",
@@ -192,9 +199,6 @@ class ImgurAlbumExtractor(ImgurExtractor):
         ("https://imgur.com/a/RhJXhVT/all", {  # 7 character album hash
             "url": "695ef0c950023362a0163ee5041796300db76674",
         }),
-        ("https://imgur.com/t/unmuted/YMqBcua", {  # unmuted URL
-            "url": "86b4747f8147cec7602f0214e267309af73a8655",
-        }),
         ("https://imgur.com/a/TcBmQ", {
             "exception": exception.HttpError,
         }),
@@ -206,6 +210,7 @@ class ImgurAlbumExtractor(ImgurExtractor):
         album = self.api.album(self.key)
         album["date"] = text.parse_timestamp(album["datetime"])
         images = album["images"]
+        count = len(images)
 
         try:
             del album["images"]
@@ -214,18 +219,19 @@ class ImgurAlbumExtractor(ImgurExtractor):
             pass
 
         yield Message.Version, 1
-        yield Message.Directory, {"album": album, "count": len(images)}
         for num, image in enumerate(images, 1):
             url = self._prepare(image)
             image["num"] = num
+            image["count"] = count
             image["album"] = album
+            yield Message.Directory, image
             yield Message.Url, url, image
 
 
 class ImgurGalleryExtractor(ImgurExtractor):
     """Extractor for imgur galleries"""
     subcategory = "gallery"
-    pattern = BASE_PATTERN + r"/gallery/(\w{7}|\w{5})"
+    pattern = BASE_PATTERN + r"/(?:gallery|t/\w+)/(\w{7}|\w{5})"
     test = (
         ("https://imgur.com/gallery/zf2fIms", {  # non-album gallery (#380)
             "pattern": "https://imgur.com/zf2fIms",
@@ -233,6 +239,10 @@ class ImgurGalleryExtractor(ImgurExtractor):
         ("https://imgur.com/gallery/eD9CT", {
             "pattern": "https://imgur.com/a/eD9CT",
         }),
+        ("https://imgur.com/t/unmuted/26sEhNr", {  # unmuted URL
+            "pattern": "https://imgur.com/26sEhNr",
+        }),
+        ("https://imgur.com/t/cat/qSB8NbN"),
     )
 
     def items(self):
@@ -322,9 +332,15 @@ class ImgurAPI():
         return self._call("image/" + image_hash)
 
     def _call(self, endpoint):
-        return self.extractor.request(
-            "https://api.imgur.com/3/" + endpoint, headers=self.headers,
-        ).json()["data"]
+        try:
+            return self.extractor.request(
+                "https://api.imgur.com/3/" + endpoint, headers=self.headers,
+            ).json()["data"]
+        except exception.HttpError as exc:
+            if exc.status != 403 or b"capacity" not in exc.response.content:
+                raise
+        self.extractor.sleep(seconds=600)
+        return self._call(endpoint)
 
     def _pagination(self, endpoint):
         num = 0

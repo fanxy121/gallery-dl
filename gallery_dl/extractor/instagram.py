@@ -1,17 +1,21 @@
 # -*- coding: utf-8 -*-
 
-# Copyright 2018-2019 Leonardo Taccari, Mike Fährmann
+# Copyright 2018-2020 Leonardo Taccari
+# Copyright 2018-2020 Mike Fährmann
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
 # published by the Free Software Foundation.
 
-"""Extract images from https://www.instagram.com/"""
+"""Extractors for https://www.instagram.com/"""
 
 from .common import Extractor, Message
 from .. import text, exception
 from ..cache import cache
+import itertools
 import json
+import time
+import re
 
 
 class InstagramExtractor(Extractor):
@@ -24,6 +28,10 @@ class InstagramExtractor(Extractor):
     cookiedomain = ".instagram.com"
     cookienames = ("sessionid",)
 
+    def __init__(self, match):
+        Extractor.__init__(self, match)
+        self._find_tags = re.compile(r'#\w+').findall
+
     def get_metadata(self):
         return {}
 
@@ -31,6 +39,7 @@ class InstagramExtractor(Extractor):
         self.login()
         yield Message.Version, 1
 
+        videos = self.config("videos", True)
         metadata = self.get_metadata()
         for data in self.instagrams():
             data.update(metadata)
@@ -41,7 +50,11 @@ class InstagramExtractor(Extractor):
                 data['_extractor'] = InstagramStoriesExtractor
                 yield Message.Queue, url, data
             else:
-                url = data.get('video_url') or data['display_url']
+                url = data.get('video_url')
+                if not url:
+                    url = data['display_url']
+                elif not videos:
+                    continue
                 yield Message.Url, url, text.nameext_from_url(url, data)
 
     def login(self):
@@ -71,9 +84,10 @@ class InstagramExtractor(Extractor):
         url = self.root + "/accounts/login/ajax/"
         data = {
             "username"     : username,
-            "password"     : password,
+            "enc_password" : "#PWD_INSTAGRAM_BROWSER:0:{}:{}".format(
+                int(time.time()), password),
             "queryParams"  : "{}",
-            "optIntoOneTap": "true",
+            "optIntoOneTap": "false",
         }
         response = self.request(url, method="POST", headers=headers, data=data)
 
@@ -109,8 +123,14 @@ class InstagramExtractor(Extractor):
         return data
 
     def _extract_postpage(self, url):
-        data = self.request(url + "?__a=1").json()
-        media = data['graphql']['shortcode_media']
+        try:
+            with self.request(url + '?__a=1', fatal=False) as response:
+                media = response.json()['graphql']['shortcode_media']
+        except (KeyError, ValueError) as exc:
+            self.log.warning("Unable to fetch data from '%s':  %s: %s",
+                             url, exc.__class__.__name__, exc)
+            self.log.debug("Server response: %s", response.text)
+            return ()
 
         common = {
             'date': text.parse_timestamp(media['taken_at_timestamp']),
@@ -118,17 +138,33 @@ class InstagramExtractor(Extractor):
             'owner_id': media['owner']['id'],
             'username': media['owner']['username'],
             'fullname': media['owner']['full_name'],
+            'post_id': media['id'],
+            'post_shortcode': media['shortcode'],
+            'post_url': url,
             'description': text.parse_unicode_escapes('\n'.join(
                 edge['node']['text']
                 for edge in media['edge_media_to_caption']['edges']
             )),
         }
 
+        tags = self._find_tags(common['description'])
+        if tags:
+            common['tags'] = sorted(set(tags))
+
+        location = media['location']
+        if location:
+            common['location_id'] = location['id']
+            common['location_slug'] = location['slug']
+            common['location_url'] = "{}/explore/locations/{}/{}/".format(
+                self.root, location['id'], location['slug'])
+
         medias = []
         if media['__typename'] == 'GraphSidecar':
-            for n in media['edge_sidecar_to_children']['edges']:
-                children = n['node']
+            for num, edge in enumerate(
+                    media['edge_sidecar_to_children']['edges'], 1):
+                children = edge['node']
                 media_data = {
+                    'num': num,
                     'media_id': children['id'],
                     'shortcode': children['shortcode'],
                     'typename': children['__typename'],
@@ -139,6 +175,7 @@ class InstagramExtractor(Extractor):
                     'sidecar_media_id': media['id'],
                     'sidecar_shortcode': media['shortcode'],
                 }
+                self._extract_tagged_users(children, media_data)
                 media_data.update(common)
                 medias.append(media_data)
 
@@ -152,6 +189,7 @@ class InstagramExtractor(Extractor):
                 'height': text.parse_int(media['dimensions']['height']),
                 'width': text.parse_int(media['dimensions']['width']),
             }
+            self._extract_tagged_users(media, media_data)
             media_data.update(common)
             medias.append(media_data)
 
@@ -172,12 +210,12 @@ class InstagramExtractor(Extractor):
             user_id = '"{}"'.format(
                 shared_data['entry_data']['StoriesPage'][0]['user']['id'])
             highlight_id = ''
-            query_hash = 'cda12de4f7fd3719c0569ce03589f4c4'
+            query_hash = '0a85e6ea60a4c99edc58ab2f3d17cfdf'
 
         variables = (
             '{{'
             '"reel_ids":[{}],"tag_names":[],"location_ids":[],'
-            '"highlight_reel_ids":[{}],"precomposed_overlay":true,'
+            '"highlight_reel_ids":[{}],"precomposed_overlay":false,'
             '"show_story_viewer_list":true,'
             '"story_viewer_fetch_count":50,"story_viewer_cursor":"",'
             '"stories_video_dash_manifest":false'
@@ -195,8 +233,10 @@ class InstagramExtractor(Extractor):
             media_data = {
                 'owner_id': media['owner']['id'],
                 'username': media['owner']['username'],
-                'date': text.parse_timestamp(media['taken_at_timestamp']),
-                'expires': text.parse_timestamp(media['expiring_at_timestamp']),
+                'date'    : text.parse_timestamp(
+                    media['taken_at_timestamp']),
+                'expires' : text.parse_timestamp(
+                    media['expiring_at_timestamp']),
                 'media_id': media['id'],
                 'typename': media['__typename'],
                 'display_url': media['display_url'],
@@ -231,7 +271,7 @@ class InstagramExtractor(Extractor):
 
         data = self._request_graphql(
             variables,
-            'aec5501414615eca36a9acf075655b1e',
+            'ad99dd9d3646cc3c0dda65debcd266a7',
             shared_data['config']['csrf_token'],
         )
 
@@ -255,7 +295,10 @@ class InstagramExtractor(Extractor):
             # Deal with different structure of pages: the first page
             # has interesting data in `entry_data', next pages in `data'.
             if 'entry_data' in shared_data:
-                base_shared_data = shared_data['entry_data'][psdf['page']][0]['graphql']
+                entry_data = shared_data['entry_data']
+                if 'HttpErrorPage' in entry_data:
+                    return
+                base_shared_data = entry_data[psdf['page']][0]['graphql']
 
                 # variables_id is available only in the first page
                 variables_id = base_shared_data[psdf['node']][psdf['node_id']]
@@ -272,7 +315,7 @@ class InstagramExtractor(Extractor):
 
             if not has_next_page:
                 break
-
+            time.sleep(3)
             end_cursor = medias['page_info']['end_cursor']
             variables = '{{"{}":"{}","first":12,"after":"{}"}}'.format(
                 psdf['variables_id'],
@@ -283,11 +326,24 @@ class InstagramExtractor(Extractor):
                 variables, psdf['query_hash'], csrf,
             )
 
+    def _extract_tagged_users(self, src_media, dest_dict):
+        edges = src_media['edge_media_to_tagged_user']['edges']
+        if edges:
+            dest_dict['tagged_users'] = tagged_users = []
+            for edge in edges:
+                user = edge['node']['user']
+                tagged_users.append({
+                    'id'       : user['id'],
+                    'username' : user['username'],
+                    'full_name': user['full_name'],
+                })
+
 
 class InstagramImageExtractor(InstagramExtractor):
     """Extractor for PostPage"""
     subcategory = "image"
-    pattern = r"(?:https?://)?(?:www\.)?instagram\.com/(?:p|tv)/([^/?&#]+)"
+    pattern = (r"(?:https?://)?(?:www\.)?instagram\.com"
+               r"/(?:p|tv|reel)/([^/?&#]+)")
     test = (
         # GraphImage
         ("https://www.instagram.com/p/BqvsDleB3lV/", {
@@ -295,12 +351,19 @@ class InstagramImageExtractor(InstagramExtractor):
                        r"/v(p/[0-9a-f]+/[0-9A-F]+)?/t51.2885-15/e35"
                        r"/44877605_725955034447492_3123079845831750529_n.jpg",
             "keyword": {
-                "date": "type:datetime",
+                "date": "dt:2018-11-29 01:04:04",
                 "description": str,
                 "height": int,
                 "likes": int,
+                "location_id": "214424288",
+                "location_slug": "hong-kong",
+                "location_url": "re:/explore/locations/214424288/hong-kong/",
                 "media_id": "1922949326347663701",
                 "shortcode": "BqvsDleB3lV",
+                "post_id": "1922949326347663701",
+                "post_shortcode": "BqvsDleB3lV",
+                "post_url": "https://www.instagram.com/p/BqvsDleB3lV/",
+                "tags": ["#WHPsquares"],
                 "typename": "GraphImage",
                 "username": "instagram",
                 "width": int,
@@ -313,6 +376,10 @@ class InstagramImageExtractor(InstagramExtractor):
             "keyword": {
                 "sidecar_media_id": "1875629777499953996",
                 "sidecar_shortcode": "BoHk1haB5tM",
+                "post_id": "1875629777499953996",
+                "post_shortcode": "BoHk1haB5tM",
+                "post_url": "https://www.instagram.com/p/BoHk1haB5tM/",
+                "num": int,
                 "likes": int,
                 "username": "instagram",
             }
@@ -320,14 +387,16 @@ class InstagramImageExtractor(InstagramExtractor):
 
         # GraphVideo
         ("https://www.instagram.com/p/Bqxp0VSBgJg/", {
-            "pattern": r"/47129943_191645575115739_8539303288426725376_n\.mp4",
+            "pattern": r"/46840863_726311431074534_7805566102611403091_n\.mp4",
             "keyword": {
-                "date": "type:datetime",
+                "date": "dt:2018-11-29 19:23:58",
                 "description": str,
                 "height": int,
                 "likes": int,
                 "media_id": "1923502432034620000",
+                "post_url": "https://www.instagram.com/p/Bqxp0VSBgJg/",
                 "shortcode": "Bqxp0VSBgJg",
+                "tags": ["#ASMR"],
                 "typename": "GraphVideo",
                 "username": "instagram",
                 "width": int,
@@ -336,13 +405,14 @@ class InstagramImageExtractor(InstagramExtractor):
 
         # GraphVideo (IGTV)
         ("https://www.instagram.com/tv/BkQjCfsBIzi/", {
-            "pattern": r"/10000000_1760663964018792_716207142595461120_n\.mp4",
+            "pattern": r"/10000000_597132547321814_702169244961988209_n\.mp4",
             "keyword": {
-                "date": "type:datetime",
+                "date": "dt:2018-06-20 19:51:32",
                 "description": str,
                 "height": int,
                 "likes": int,
                 "media_id": "1806097553666903266",
+                "post_url": "https://www.instagram.com/p/BkQjCfsBIzi/",
                 "shortcode": "BkQjCfsBIzi",
                 "typename": "GraphVideo",
                 "username": "instagram",
@@ -354,11 +424,25 @@ class InstagramImageExtractor(InstagramExtractor):
         ("https://www.instagram.com/p/BtOvDOfhvRr/", {
             "count": 2,
             "keyword": {
+                "post_url": "https://www.instagram.com/p/BtOvDOfhvRr/",
                 "sidecar_media_id": "1967717017113261163",
                 "sidecar_shortcode": "BtOvDOfhvRr",
                 "video_url": str,
             }
-        })
+        }),
+
+        # GraphImage with tagged user
+        ("https://www.instagram.com/p/B_2lf3qAd3y/", {
+            "keyword": {
+                "tagged_users": [{
+                    "id": "1246468638",
+                    "username": "kaaymbl",
+                    "full_name": "Call Me Kay",
+                }]
+            }
+        }),
+
+        ("https://www.instagram.com/reel/CDg_6Y1pxWu/"),
     )
 
     def __init__(self, match):
@@ -389,12 +473,38 @@ class InstagramStoriesExtractor(InstagramExtractor):
         return self._extract_stories(url)
 
 
+class InstagramSavedExtractor(InstagramExtractor):
+    """Extractor for ProfilePage saved media"""
+    subcategory = "saved"
+    pattern = (r"(?:https?://)?(?:www\.)?instagram\.com"
+               r"/(?!p/|explore/|directory/|accounts/|stories/|tv/)"
+               r"([^/?&#]+)/saved")
+    test = ("https://www.instagram.com/instagram/saved/",)
+
+    def __init__(self, match):
+        InstagramExtractor.__init__(self, match)
+        self.username = match.group(1)
+
+    def instagrams(self):
+        url = '{}/{}/saved/'.format(self.root, self.username)
+        shared_data = self._extract_shared_data(url)
+
+        return self._extract_page(shared_data, {
+            'page': 'ProfilePage',
+            'node': 'user',
+            'node_id': 'id',
+            'variables_id': 'id',
+            'edge_to_medias': 'edge_saved_media',
+            'query_hash': '8c86fed24fa03a8a2eea2a70a80c7b6b',
+        })
+
+
 class InstagramUserExtractor(InstagramExtractor):
     """Extractor for ProfilePage"""
     subcategory = "user"
     pattern = (r"(?:https?://)?(?:www\.)?instagram\.com"
-               r"/(?!p/|explore/|directory/|accounts/|stories/|tv/)"
-               r"([^/?&#]+)/?$")
+               r"/(?!(?:p|explore|directory|accounts|stories|tv|reel)/)"
+               r"([^/?&#]+)/?(?:$|[?#])")
     test = (
         ("https://www.instagram.com/instagram/", {
             "range": "1-16",
@@ -406,6 +516,7 @@ class InstagramUserExtractor(InstagramExtractor):
             "range": "1-2",
             "count": 2,
         }),
+        ("https://www.instagram.com/instagram/?hl=en"),
     )
 
     def __init__(self, match):
@@ -416,17 +527,22 @@ class InstagramUserExtractor(InstagramExtractor):
         url = '{}/{}/'.format(self.root, self.username)
         shared_data = self._extract_shared_data(url)
 
-        if self.config('highlights'):
-            yield from self._extract_story_highlights(shared_data)
-
-        yield from self._extract_page(shared_data, {
+        instagrams = self._extract_page(shared_data, {
             'page': 'ProfilePage',
             'node': 'user',
             'node_id': 'id',
             'variables_id': 'id',
             'edge_to_medias': 'edge_owner_to_timeline_media',
-            'query_hash': 'f2405b236d85e8296cf30347c9f08c2a',
+            'query_hash': '15bf78a4ad24e33cbd838fdb31353ac1',
         })
+
+        if self.config('highlights'):
+            instagrams = itertools.chain(
+                self._extract_story_highlights(shared_data),
+                instagrams,
+            )
+
+        return instagrams
 
 
 class InstagramChannelExtractor(InstagramExtractor):
@@ -486,5 +602,5 @@ class InstagramTagExtractor(InstagramExtractor):
             'node_id': 'name',
             'variables_id': 'tag_name',
             'edge_to_medias': 'edge_hashtag_to_media',
-            'query_hash': 'f12c9ec5e46a3173b2969c712ad84744',
+            'query_hash': 'c769cb6c71b24c8a86590b22402fda50',
         })

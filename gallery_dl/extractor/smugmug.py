@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Copyright 2018-2019 Mike Fährmann
+# Copyright 2018-2020 Mike Fährmann
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
@@ -21,6 +21,7 @@ class SmugmugExtractor(Extractor):
     category = "smugmug"
     filename_fmt = ("{category}_{User[NickName]:?/_/}"
                     "{Image[UploadKey]}_{Image[ImageKey]}.{extension}")
+    cookiedomain = None
     empty_user = {
         "Uri": "",
         "ResponseLevel": "Public",
@@ -111,13 +112,13 @@ class SmugmugImageExtractor(SmugmugExtractor):
     test = (
         ("https://tdm.smugmug.com/Nature/Dove/i-kCsLJT6", {
             "url": "f624ad7293afd6412a7d34e3950a118596c36c85",
-            "keyword": "ea70e93be5067dca988d871dcf9afac491a189a4",
+            "keyword": "d69c69c1517b8ea77bc763cffc4d0a4002dfee3f",
             "content": "ecbd9d7b4f75a637abc8d35319be9ec065a44eb0",
         }),
         # video
         ("https://tstravels.smugmug.com/Dailies/Daily-Dose-2015/i-39JFNzB", {
             "url": "04d0ab1ff829ca7d78f5acb5548953df08e9a5ee",
-            "keyword": "c708c4b9527a2fb29396c19f7628f9cf4b0b3a39",
+            "keyword": "720da317232504f05099da37802ed3c3ce3cd310",
         }),
     )
 

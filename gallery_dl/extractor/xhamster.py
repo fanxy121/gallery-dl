@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Copyright 2019 Mike Fährmann
+# Copyright 2019-2020 Mike Fährmann
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
@@ -13,7 +13,8 @@ from .. import text
 import json
 
 
-BASE_PATTERN = r"(?:https?://)?((?:[^.]+\.)?xhamster\d?\.(?:com|one|desi))"
+BASE_PATTERN = (r"(?:https?://)?((?:[^.]+\.)?xhamster"
+                r"(?:\d?\.(?:com|one|desi)|\.porncache\.net))")
 
 
 class XhamsterExtractor(Extractor):
@@ -49,7 +50,7 @@ class XhamsterGalleryExtractor(XhamsterExtractor):
                 "pageURL": str,
                 "thumbURL": str,
                 "gallery": {
-                    "date": "type:datetime",
+                    "date": "dt:2019-04-16 00:07:31",
                     "description": "",
                     "dislikes": int,
                     "id": 11748968,
@@ -79,6 +80,7 @@ class XhamsterGalleryExtractor(XhamsterExtractor):
         ("https://xhamster.desi/photos/gallery/11748968"),
         ("https://xhamster2.com/photos/gallery/11748968"),
         ("https://en.xhamster.com/photos/gallery/11748968"),
+        ("https://xhamster.porncache.net/photos/gallery/11748968"),
     )
 
     def __init__(self, match):
@@ -144,7 +146,7 @@ class XhamsterGalleryExtractor(XhamsterExtractor):
     def _data(self, url):
         page = self.request(url).text
         return json.loads(text.extract(
-            page, "window.initials =", "</script>")[0].rstrip("\n\r;"))
+            page, "window.initials=", "</script>")[0].rstrip("\n\r;"))
 
 
 class XhamsterUserExtractor(XhamsterExtractor):
@@ -152,7 +154,7 @@ class XhamsterUserExtractor(XhamsterExtractor):
     subcategory = "user"
     pattern = BASE_PATTERN + r"/users/([^/?&#]+)(?:/photos)?/?(?:$|[?#])"
     test = (
-        ("https://xhamster.com/users/nickname68/photos", {
+        ("https://xhamster.com/users/goldenpalomino/photos", {
             "pattern": XhamsterGalleryExtractor.pattern,
             "count": 50,
             "range": "1-50",

@@ -17,22 +17,26 @@ CATEGORY_MAP = {
     "archivedmoe"    : "Archived.Moe",
     "archiveofsins"  : "Archive of Sins",
     "artstation"     : "ArtStation",
+    "aryion"         : "Eka's Portal",
     "b4k"            : "arch.b4k.co",
+    "baraag"         : "baraag",
+    "bcy"            : "半次元",
     "bobx"           : "BobX",
     "deviantart"     : "DeviantArt",
     "dokireader"     : "Doki Reader",
     "dynastyscans"   : "Dynasty Reader",
     "e621"           : "e621",
-    "erolord"        : "EroLord.com",
     "e-hentai"       : "E-Hentai",
     "exhentai"       : "ExHentai",
     "fallenangels"   : "Fallen Angels Scans",
     "fashionnova"    : "Fashion Nova",
+    "furaffinity"    : "Fur Affinity",
     "hbrowse"        : "HBrowse",
     "hentai2read"    : "Hentai2Read",
     "hentaicafe"     : "Hentai Cafe",
     "hentaifoundry"  : "Hentai Foundry",
     "hentaifox"      : "HentaiFox",
+    "hentaihand"     : "HentaiHand",
     "hentaihere"     : "HentaiHere",
     "hitomi"         : "Hitomi.la",
     "idolcomplex"    : "Idol Complex",
@@ -40,9 +44,11 @@ CATEGORY_MAP = {
     "imagefap"       : "ImageFap",
     "imgbb"          : "ImgBB",
     "imgbox"         : "imgbox",
+    "imagechest"     : "ImageChest",
     "imgth"          : "imgth",
     "imgur"          : "imgur",
     "jaiminisbox"    : "Jaimini's Box",
+    "kabeuchi"       : "かべうち",
     "kireicake"      : "Kirei Cake",
     "kissmanga"      : "KissManga",
     "lineblog"       : "LINE BLOG",
@@ -50,8 +56,10 @@ CATEGORY_MAP = {
     "mangadex"       : "MangaDex",
     "mangafox"       : "Manga Fox",
     "mangahere"      : "Manga Here",
+    "mangakakalot"   : "MangaKakalot",
     "mangapark"      : "MangaPark",
     "mangastream"    : "Manga Stream",
+    "mastodon.social": "mastodon.social",
     "myportfolio"    : "Adobe Portfolio",
     "nhentai"        : "nhentai",
     "nijie"          : "nijie",
@@ -62,6 +70,7 @@ CATEGORY_MAP = {
     "powermanga"     : "PowerManga",
     "readcomiconline": "Read Comic Online",
     "rbt"            : "RebeccaBlackTech",
+    "redgifs"        : "RedGIFs",
     "rule34"         : "Rule 34",
     "sankaku"        : "Sankaku Channel",
     "sankakucomplex" : "Sankaku Complex",
@@ -74,63 +83,101 @@ CATEGORY_MAP = {
     "slickpic"       : "SlickPic",
     "slideshare"     : "SlideShare",
     "smugmug"        : "SmugMug",
+    "speakerdeck"    : "Speaker Deck",
+    "subscribestar"  : "SubscribeStar",
     "thebarchive"    : "The /b/ Archive",
     "vanillarock"    : "もえぴりあ",
     "vsco"           : "VSCO",
+    "webtoons"       : "Webtoon",
     "wikiart"        : "WikiArt.org",
     "worldthree"     : "World Three",
     "xhamster"       : "xHamster",
     "xvideos"        : "XVideos",
-    "yaplog"         : "yaplog!",
     "yuki"           : "yuki.la 4chan archive",
 }
 
 SUBCATEGORY_MAP = {
-    "artwork": "Artwork Listings",
-    "artists": "",
     "doujin" : "Doujin",
     "gallery": "Galleries",
     "image"  : "individual Images",
-    "issue"  : "Comic-Issues",
+    "issue"  : "Comic Issues",
     "manga"  : "Manga",
-    "me"     : "pixiv.me Links",
-    "media"  : "Media Timelines",
-    "path"   : "Images from Users and Folders",
-    "pinit"  : "pin.it Links",
     "popular": "Popular Images",
     "recent" : "Recent Images",
     "search" : "Search Results",
-    "stash"  : "Sta.sh",
     "status" : "Images from Statuses",
-    "tag"    : "Tag-Searches",
+    "tag"    : "Tag Searches",
     "user"   : "User Profiles",
-    "work"   : "Individual Images",
+    "following"    : "",
     "related-pin"  : "related Pins",
     "related-board": "",
+
+    "artstation": {
+        "artwork": "Artwork Listings",
+    },
+    "deviantart": {
+        "stash": "Sta.sh",
+    },
+    "instagram": {
+        "saved": "Saved Posts",
+    },
+    "newgrounds": {
+        "art"  : "Art",
+        "audio": "Audio",
+        "media": "Media Files",
+    },
+    "pinterest": {
+        "pinit": "pin.it Links",
+    },
+    "pixiv": {
+        "me"  : "pixiv.me Links",
+        "work": "individual Images",
+    },
+    "smugmug": {
+        "path": "Images from Users and Folders",
+    },
+    "twitter": {
+        "media": "Media Timelines",
+    },
+    "wikiart": {
+        "artists": "Artist Listings",
+    },
 }
 
+_OAUTH = " (`OAuth <https://github.com/mikf/gallery-dl#oauth>`__)"
+_COOKIES = " (`Cookies <https://github.com/mikf/gallery-dl#cookies>`__)"
+_APIKEY_WH = " (`API Key <configuration.rst#extractorwallhavenapi-key>`__)"
+
 AUTH_MAP = {
-    "danbooru"   : "Optional",
-    "deviantart" : "Optional (OAuth)",
-    "e-hentai"   : "Optional",
-    "exhentai"   : "Optional",
-    "flickr"     : "Optional (OAuth)",
-    "idolcomplex": "Optional",
-    "imgbb"      : "Optional",
-    "instagram"  : "Optional",
-    "mangoxo"    : "Optional",
-    "newgrounds" : "Optional",
-    "nijie"      : "Required",
-    "pixiv"      : "Required",
-    "reddit"     : "Optional (OAuth)",
-    "sankaku"    : "Optional",
-    "seiga"      : "Required",
-    "smugmug"    : "Optional (OAuth)",
-    "tsumino"    : "Optional",
-    "tumblr"     : "Optional (OAuth)",
-    "twitter"    : "Optional",
-    "wallhaven"  : ("Optional (`API Key "
-                    "<configuration.rst#extractorwallhavenapi-key>`__)"),
+    "aryion"         : "Optional" + _COOKIES,
+    "baraag"         : "Optional" + _OAUTH,
+    "danbooru"       : "Optional",
+    "deviantart"     : "Optional" + _OAUTH,
+    "e621"           : "Optional",
+    "e-hentai"       : "Optional",
+    "exhentai"       : "Optional",
+    "flickr"         : "Optional" + _OAUTH,
+    "furaffinity"    : "Optional" + _COOKIES,
+    "idolcomplex"    : "Optional",
+    "imgbb"          : "Optional",
+    "inkbunny"       : "Optional",
+    "instagram"      : "Optional",
+    "mangoxo"        : "Optional",
+    "mastodon.social": "Optional" + _OAUTH,
+    "newgrounds"     : "Optional",
+    "nijie"          : "Required",
+    "patreon"        : "Optional" + _COOKIES,
+    "pawoo"          : "Optional" + _OAUTH,
+    "pixiv"          : "Required",
+    "reddit"         : "Optional" + _OAUTH,
+    "sankaku"        : "Optional",
+    "seiga"          : "Required",
+    "smugmug"        : "Optional" + _OAUTH,
+    "subscribestar"  : "Optional",
+    "tsumino"        : "Optional",
+    "tumblr"         : "Optional" + _OAUTH,
+    "twitter"        : "Optional",
+    "wallhaven"      : "Optional" + _APIKEY_WH,
 }
 
 IGNORE_LIST = (
@@ -171,9 +218,16 @@ def category_text(cls):
 
 def subcategory_text(cls):
     """Return a human-readable representation of a subcategory"""
-    sc = cls.subcategory
+    c, sc = cls.category, cls.subcategory
+
+    if c in SUBCATEGORY_MAP:
+        scm = SUBCATEGORY_MAP[c]
+        if sc in scm:
+            return scm[sc]
+
     if sc in SUBCATEGORY_MAP:
         return SUBCATEGORY_MAP[sc]
+
     sc = sc.capitalize()
     return sc if sc.endswith("s") else sc + "s"
 
@@ -243,7 +297,7 @@ def write_output(fobj, columns, extractors):
         size = col[1]
         output = output if isinstance(output, str) else col[2](output)
 
-        if len(output) > size:
+        if len(output) > size and col[0][0] != "A":
             sub = "|{}-{}|".format(category, col[0][0])
             subs.append((sub, output))
             output = sub

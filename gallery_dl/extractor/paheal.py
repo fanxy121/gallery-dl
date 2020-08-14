@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Copyright 2018-2019 Mike Fährmann
+# Copyright 2018-2020 Mike Fährmann
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
@@ -45,7 +45,7 @@ class PahealTagExtractor(PahealExtractor):
     directory_fmt = ("{category}", "{search_tags}")
     pattern = (r"(?:https?://)?(?:rule34|rule63|cosplay)\.paheal\.net"
                r"/post/list/([^/?&#]+)")
-    test = ("https://rule34.paheal.net/post/list/k-on/1", {
+    test = ("https://rule34.paheal.net/post/list/Ayane_Suzuki/1", {
         "pattern": r"https://[^.]+\.paheal\.net/_images/\w+/\d+%20-%20",
         "count": ">= 15"
     })
@@ -95,8 +95,8 @@ class PahealPostExtractor(PahealExtractor):
     pattern = (r"(?:https?://)?(?:rule34|rule63|cosplay)\.paheal\.net"
                r"/post/view/(\d+)")
     test = ("https://rule34.paheal.net/post/view/481609", {
-        "url": "1142779378f655ec0497d4c301836aa667f788b1",
-        "keyword": "34e9e93d4fa6fa06fac1a56e78c9a52e8cd7b271",
+        "url": "d3fd0f82762716fe3fb03c9c923e61c13ce22204",
+        "keyword": "35748081bfeaab48f909f4b097a4d79b2be12538",
         "content": "7b924bcf150b352ac75c9d281d061e174c851a11",
     })
 

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Copyright 2015-2019 Mike Fährmann
+# Copyright 2015-2020 Mike Fährmann
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
@@ -27,7 +27,6 @@ class BooruExtractor(SharedConfigMixin, Extractor):
     page_start = 1
     page_limit = None
     sort = False
-    ugoira = True
 
     def __init__(self, match):
         super().__init__(match)
@@ -52,11 +51,7 @@ class BooruExtractor(SharedConfigMixin, Extractor):
 
             for image in images:
                 try:
-                    if "pixiv_ugoira_frame_data" in image and \
-                            "large_file_url" in image and not self.ugoira:
-                        url = image["large_file_url"]
-                    else:
-                        url = image["file_url"]
+                    url = image["file_url"]
                 except KeyError:
                     continue
                 if url.startswith("/"):
@@ -110,12 +105,6 @@ class XmlParserMixin():
     def parse_response(self, response):
         root = ElementTree.fromstring(response.text)
         return [post.attrib for post in root]
-
-
-class DanbooruPageMixin():
-    """Pagination for Danbooru v2"""
-    def update_page(self, data):
-        self.params["page"] = "b{}".format(data["id"])
 
 
 class MoebooruPageMixin():
@@ -182,7 +171,8 @@ class GelbooruPoolMixin(PoolMixin):
             name, pos = text.extract(page, "<h4>Pool: ", "</h4>")
         if not name:
             raise exception.NotFoundError("pool")
-        self.posts = list(text.extract_iter(page, 'id="p', '"', pos))
+        self.posts = list(text.extract_iter(
+            page, 'class="thumb" id="p', '"', pos))
 
         return {
             "pool": text.parse_int(self.pool),
@@ -214,8 +204,8 @@ class PostMixin():
         self.params["tags"] = "id:" + self.post
 
 
-class PopularMixin():
-    """Extraction and metadata handling for Danbooru v2"""
+class MoebooruPopularMixin():
+    """Extraction and metadata handling for Moebooru and Danbooru v1"""
     subcategory = "popular"
     directory_fmt = ("{category}", "popular", "{scale}", "{date}")
     archive_fmt = "P_{scale[0]}_{date}_{id}"
@@ -225,36 +215,19 @@ class PopularMixin():
     def __init__(self, match):
         super().__init__(match)
         self.params.update(text.parse_query(match.group("query")))
+        self.scale = match.group("scale")
 
     def get_metadata(self, fmt="%Y-%m-%d"):
-        date = self.get_date() or datetime.datetime.utcnow().strftime(fmt)
+        date = self.get_date() or datetime.date.today().isoformat()
         scale = self.get_scale() or "day"
 
         if scale == "week":
-            dt = datetime.datetime.strptime(date, fmt)
-            dt -= datetime.timedelta(days=dt.weekday())
-            date = dt.strftime(fmt)
+            date = datetime.date.fromisoformat(date)
+            date = (date - datetime.timedelta(days=date.weekday())).isoformat()
         elif scale == "month":
             date = date[:-3]
 
         return {"date": date, "scale": scale}
-
-    def get_scale(self):
-        if "scale" in self.params:
-            return self.params["scale"]
-        return None
-
-    def get_date(self):
-        if "date" in self.params:
-            return self.params["date"][:10]
-        return None
-
-
-class MoebooruPopularMixin(PopularMixin):
-    """Extraction and metadata handling for Moebooru and Danbooru v1"""
-    def __init__(self, match):
-        super().__init__(match)
-        self.scale = match.group("scale")
 
     def get_date(self):
         if "year" in self.params:

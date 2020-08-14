@@ -45,11 +45,12 @@ class SimplyhentaiGalleryExtractor(GalleryExtractor):
 
         self.gallery_url = extr('<link rel="canonical" href="', '"')
         title = extr('<meta property="og:title" content="', '"')
+        image = extr('<meta property="og:image" content="', '"')
         if not title:
             raise exception.NotFoundError("gallery")
         data = {
             "title"     : text.unescape(title),
-            "gallery_id": text.parse_int(extr('/Album/', '/')),
+            "gallery_id": text.parse_int(image.split("/")[-2]),
             "parody"    : split(extr('box-title">Series</div>', '</div>')),
             "language"  : text.remove_html(extr(
                 'box-title">Language</div>', '</div>')) or None,
@@ -143,6 +144,7 @@ class SimplyhentaiVideoExtractor(Extractor):
             "pattern": r"https://www\.googleapis\.com/drive/v3/files"
                        r"/0B1ecQ8ZVLm3JcHZzQzBnVy1ZUmc\?alt=media&key=[\w-]+",
             "keyword": "706790708b14773efc1e075ddd3b738a375348a5",
+            "options": (("verify", False),),
             "count": 1,
         }),
         (("https://videos.simply-hentai.com"

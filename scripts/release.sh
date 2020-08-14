@@ -72,13 +72,6 @@ build-windows() {
         sleep 5
     done
     sleep 2
-
-    # check exe version
-    OUTPUT="$(wine gallery-dl.exe --version)"
-    if [[ ! "${OUTPUT%?}" == "${NEWVERSION}" ]]; then
-        echo "exe version mismatch: ${OUTPUT} != ${NEWVERSION}"
-        exit 3
-    fi
 }
 
 sign() {
@@ -158,11 +151,11 @@ prompt
 supportedsites
 cleanup
 update
+changelog
 build-python
 build-linux
 build-windows
 sign
-changelog
 git-upload
 pypi-upload
 update-dev

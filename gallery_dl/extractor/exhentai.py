@@ -23,7 +23,7 @@ BASE_PATTERN = r"(?:https?://)?(e[x-]|g\.e-)hentai\.org"
 class ExhentaiExtractor(Extractor):
     """Base class for exhentai extractors"""
     category = "exhentai"
-    directory_fmt = ("{category}", "{gallery_id} {title}")
+    directory_fmt = ("{category}", "{gallery_id} {title[:247]}")
     filename_fmt = (
         "{gallery_id}_{num:>04}_{image_token}_{filename}.{extension}")
     archive_fmt = "{gallery_id}_{num}"
@@ -35,9 +35,12 @@ class ExhentaiExtractor(Extractor):
 
     def __init__(self, match):
         version = match.group(1)
-        if version != "ex":
-            self.root = "https://e-hentai.org"
-            self.cookiedomain = ".e-hentai.org"
+        domain = self.config("domain", "auto")
+        if domain == "auto":
+            domain = ("ex" if version == "ex" else "e-") + "hentai.org"
+        self.root = "https://" + domain
+        self.cookiedomain = "." + domain
+
         Extractor.__init__(self, match)
         self.limits = self.config("limits", True)
         self.original = self.config("original", True)

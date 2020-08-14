@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Copyright 2015-2019 Mike Fährmann
+# Copyright 2015-2020 Mike Fährmann
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
@@ -22,34 +22,93 @@ LOG_LEVEL = logging.INFO
 
 
 class Logger(logging.Logger):
-    """Custom logger that includes extractor and job info in log records"""
-    extractor = util.NONE
-    job = util.NONE
+    """Custom logger that includes extra info in log records"""
 
     def makeRecord(self, name, level, fn, lno, msg, args, exc_info,
                    func=None, extra=None, sinfo=None,
                    factory=logging._logRecordFactory):
         rv = factory(name, level, fn, lno, msg, args, exc_info, func, sinfo)
-        rv.extractor = self.extractor
-        rv.job = self.job
+        if extra:
+            rv.__dict__.update(extra)
         return rv
+
+
+class LoggerAdapter():
+    """Trimmed-down version of logging.LoggingAdapter"""
+    __slots__ = ("logger", "extra")
+
+    def __init__(self, logger, extra):
+        self.logger = logger
+        self.extra = extra
+
+    def debug(self, msg, *args, **kwargs):
+        if self.logger.isEnabledFor(logging.DEBUG):
+            kwargs["extra"] = self.extra
+            self.logger._log(logging.DEBUG, msg, args, **kwargs)
+
+    def info(self, msg, *args, **kwargs):
+        if self.logger.isEnabledFor(logging.INFO):
+            kwargs["extra"] = self.extra
+            self.logger._log(logging.INFO, msg, args, **kwargs)
+
+    def warning(self, msg, *args, **kwargs):
+        if self.logger.isEnabledFor(logging.WARNING):
+            kwargs["extra"] = self.extra
+            self.logger._log(logging.WARNING, msg, args, **kwargs)
+
+    def error(self, msg, *args, **kwargs):
+        if self.logger.isEnabledFor(logging.ERROR):
+            kwargs["extra"] = self.extra
+            self.logger._log(logging.ERROR, msg, args, **kwargs)
+
+
+class PathfmtProxy():
+    __slots__ = ("job",)
+
+    def __init__(self, job):
+        self.job = job
+
+    def __getattribute__(self, name):
+        pathfmt = object.__getattribute__(self, "job").pathfmt
+        return pathfmt.__dict__.get(name) if pathfmt else None
+
+
+class KwdictProxy():
+    __slots__ = ("job",)
+
+    def __init__(self, job):
+        self.job = job
+
+    def __getattribute__(self, name):
+        pathfmt = object.__getattribute__(self, "job").pathfmt
+        return pathfmt.kwdict.get(name) if pathfmt else None
 
 
 class Formatter(logging.Formatter):
     """Custom formatter that supports different formats per loglevel"""
 
     def __init__(self, fmt, datefmt):
-        if not isinstance(fmt, dict):
+        if isinstance(fmt, dict):
+            for key in ("debug", "info", "warning", "error"):
+                value = fmt[key] if key in fmt else LOG_FORMAT
+                fmt[key] = (util.Formatter(value).format_map,
+                            "{asctime" in value)
+        else:
+            if fmt == LOG_FORMAT:
+                fmt = (fmt.format_map, False)
+            else:
+                fmt = (util.Formatter(fmt).format_map, "{asctime" in fmt)
             fmt = {"debug": fmt, "info": fmt, "warning": fmt, "error": fmt}
+
         self.formats = fmt
         self.datefmt = datefmt
 
     def format(self, record):
         record.message = record.getMessage()
-        fmt = self.formats[record.levelname]
-        if "{asctime" in fmt:
+        fmt, asctime = self.formats[record.levelname]
+        if asctime:
             record.asctime = self.formatTime(record, self.datefmt)
-        msg = fmt.format_map(record.__dict__)
+        msg = fmt(record.__dict__)
         if record.exc_info and not record.exc_text:
             record.exc_text = self.formatException(record.exc_info)
         if record.exc_text:
@@ -79,6 +138,36 @@ def initialize_logging(loglevel):
     root.addHandler(handler)
 
     return logging.getLogger("gallery-dl")
+
+
+def configure_logging(loglevel):
+    root = logging.getLogger()
+    minlevel = loglevel
+
+    # stream logging handler
+    handler = root.handlers[0]
+    opts = config.interpolate(("output",), "log")
+    if opts:
+        if isinstance(opts, str):
+            opts = {"format": opts}
+        if handler.level == LOG_LEVEL and "level" in opts:
+            handler.setLevel(opts["level"])
+        if "format" in opts or "format-date" in opts:
+            handler.setFormatter(Formatter(
+                opts.get("format", LOG_FORMAT),
+                opts.get("format-date", LOG_FORMAT_DATE),
+            ))
+        if minlevel > handler.level:
+            minlevel = handler.level
+
+    # file logging handler
+    handler = setup_logging_handler("logfile", lvl=loglevel)
+    if handler:
+        root.addHandler(handler)
+        if minlevel > handler.level:
+            minlevel = handler.level
+
+    root.setLevel(minlevel)
 
 
 def setup_logging_handler(key, fmt=LOG_FORMAT, lvl=LOG_LEVEL):
@@ -112,22 +201,6 @@ def setup_logging_handler(key, fmt=LOG_FORMAT, lvl=LOG_LEVEL):
     return handler
 
 
-def configure_logging_handler(key, handler):
-    """Configure a logging handler"""
-    opts = config.interpolate(("output",), key)
-    if not opts:
-        return
-    if isinstance(opts, str):
-        opts = {"format": opts}
-    if handler.level == LOG_LEVEL and "level" in opts:
-        handler.setLevel(opts["level"])
-    if "format" in opts or "format-date" in opts:
-        handler.setFormatter(Formatter(
-            opts.get("format", LOG_FORMAT),
-            opts.get("format-date", LOG_FORMAT_DATE),
-        ))
-
-
 # --------------------------------------------------------------------
 # Utility functions
 
@@ -135,12 +208,13 @@ def replace_std_streams(errors="replace"):
     """Replace standard streams and set their error handlers to 'errors'"""
     for name in ("stdout", "stdin", "stderr"):
         stream = getattr(sys, name)
-        setattr(sys, name, stream.__class__(
-            stream.buffer,
-            errors=errors,
-            newline=stream.newlines,
-            line_buffering=stream.line_buffering,
-        ))
+        if stream:
+            setattr(sys, name, stream.__class__(
+                stream.buffer,
+                errors=errors,
+                newline=stream.newlines,
+                line_buffering=stream.line_buffering,
+            ))
 
 
 # --------------------------------------------------------------------
@@ -229,7 +303,7 @@ class ColorOutput(TerminalOutput):
         print("\r\033[1;32m", self.shorten(path), "\033[0m", sep="")
 
 
-if os.name == "nt":
+if util.WINDOWS:
     ANSI = os.environ.get("TERM") == "ANSI"
     OFFSET = 1
     CHAR_SKIP = "# "

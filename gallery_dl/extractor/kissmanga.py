@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Copyright 2015-2019 Mike Fährmann
+# Copyright 2015-2020 Mike Fährmann
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
@@ -19,9 +19,9 @@ import re
 class RedirectMixin():
     """Detect and handle redirects to CAPTCHA pages"""
 
-    def request(self, url):
+    def request(self, url, **kwargs):
         while True:
-            response = Extractor.request(self, url)
+            response = Extractor.request(self, url, **kwargs)
             if not response.history or "/AreYouHuman" not in response.url:
                 return response
             if self.config("captcha", "stop") == "wait":
@@ -94,7 +94,7 @@ class KissmangaChapterExtractor(KissmangaBase, ChapterExtractor):
         }),
         ("https://kissmanga.com/Manga/Houseki-no-Kuni/Oneshot?id=404189", {
             "count": 49,
-            "keyword": "d44d1b21d08e4dbf888b0c450a3f1bc919588b4f",
+            "keyword": "cea131c9fe9c71309b3270cd86718d4d1198c31c",
         }),
         ("https://kissmanga.com/mAnGa/mOnStEr/Monster-79?id=7608"),
     )
@@ -126,7 +126,7 @@ class KissmangaChapterExtractor(KissmangaBase, ChapterExtractor):
                 (aes.aes_cbc_decrypt_text(
                     data, key, iv).partition("&")[0], None)
                 for data in text.extract_iter(
-                    page, 'lstImages.push(wrapKA("', '"'
+                    page, 'push(wrapKA("', '"'
                 )
             ]
         except UnicodeDecodeError:

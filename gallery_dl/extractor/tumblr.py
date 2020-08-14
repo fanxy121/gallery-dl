@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Copyright 2016-2019 Mike Fährmann
+# Copyright 2016-2020 Mike Fährmann
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
@@ -12,7 +12,6 @@ from .common import Extractor, Message
 from .. import text, oauth, extractor, exception
 from datetime import datetime, timedelta
 import re
-import time
 
 
 def _original_inline_image(url):
@@ -45,6 +44,7 @@ class TumblrExtractor(Extractor):
     directory_fmt = ("{category}", "{name}")
     filename_fmt = "{category}_{blog_name}_{id}_{num:>02}.{extension}"
     archive_fmt = "{id}_{num}"
+    cookiedomain = None
 
     def __init__(self, match):
         Extractor.__init__(self, match)
@@ -108,11 +108,11 @@ class TumblrExtractor(Extractor):
                     del photo["alt_sizes"]
                     yield self._prepare_image(photo["url"], post)
 
-            url = post.get("audio_url")  # type: "audio"
+            url = post.get("audio_url")  # type "audio"
             if url and url.startswith("https://a.tumblr.com/"):
                 yield self._prepare(url, post)
 
-            url = post.get("video_url")  # type: "video"
+            url = post.get("video_url")  # type "video"
             if url:
                 yield self._prepare(_original_video(url), post)
 
@@ -156,8 +156,8 @@ class TumblrExtractor(Extractor):
             invalid = types - POST_TYPES
             if invalid:
                 types = types & POST_TYPES
-                self.log.warning('invalid post types: "%s"',
-                                 '", "'.join(sorted(invalid)))
+                self.log.warning("Invalid post types: '%s'",
+                                 "', '".join(sorted(invalid)))
             return types
 
     @staticmethod
@@ -194,7 +194,7 @@ class TumblrExtractor(Extractor):
         return not self.reblogs
 
     def _skip_reblog_same_blog(self, post):
-        return self.blog != post["reblogged_root_uuid"]
+        return self.blog != post.get("reblogged_root_uuid")
 
 
 class TumblrUserExtractor(TumblrExtractor):
@@ -276,9 +276,6 @@ class TumblrPostExtractor(TumblrExtractor):
         ("https://mikf123.tumblr.com/post/181022380064/chat-post", {
             "count": 0,
         }),
-        ("http://pinetre-3.tumblr.com/post/181904381470/via", {
-            "count": 0,  # audio post with "null" as URL (#165)
-        }),
         ("http://ziemniax.tumblr.com/post/109697912859/", {
             "exception": exception.NotFoundError,  # HTML response (#297)
         }),
@@ -310,7 +307,7 @@ class TumblrTagExtractor(TumblrExtractor):
 
     def __init__(self, match):
         TumblrExtractor.__init__(self, match)
-        self.tag = text.unquote(match.group(3))
+        self.tag = text.unquote(match.group(3).replace("-", " "))
 
     def posts(self):
         return self.api.posts(self.blog, {"tag": self.tag})
@@ -407,27 +404,18 @@ class TumblrAPI(oauth.OAuth1API):
             # daily rate limit
             if response.headers.get("x-ratelimit-perday-remaining") == "0":
                 reset = response.headers.get("x-ratelimit-perday-reset")
+                t = (datetime.now() + timedelta(seconds=float(reset))).time()
+
+                self.log.error("Daily API rate limit exceeded")
                 raise exception.StopExtraction(
-                    "Daily API rate limit exceeded: aborting; "
-                    "rate limit will reset at %s", self._to_time(reset),
-                )
+                    "Aborting - Rate limit will reset at %s",
+                    "{:02}:{:02}:{:02}".format(t.hour, t.minute, t.second))
 
             # hourly rate limit
             reset = response.headers.get("x-ratelimit-perhour-reset")
             if reset:
-                self.log.info(
-                    "Hourly API rate limit exceeded; waiting until "
-                    "%s for rate limit reset", self._to_time(reset),
-                )
-                time.sleep(int(reset) + 1)
+                self.log.info("Hourly API rate limit exceeded")
+                self.extractor.wait(seconds=reset)
                 return self._call(blog, endpoint, params)
 
         raise exception.StopExtraction(data)
-
-    @staticmethod
-    def _to_time(reset):
-        try:
-            reset_time = datetime.now() + timedelta(seconds=int(reset))
-        except (ValueError, TypeError):
-            return "?"
-        return reset_time.strftime("%H:%M:%S")

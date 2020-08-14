@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Copyright 2017-2019 Mike Fährmann
+# Copyright 2017-2020 Mike Fährmann
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
@@ -21,6 +21,7 @@ import datetime
 import operator
 import itertools
 import urllib.parse
+from http.cookiejar import Cookie
 from email.utils import mktime_tz, parsedate_tz
 from . import text, exception
 
@@ -83,6 +84,13 @@ def filter_dict(a):
     return {k: v for k, v in a.items() if k[0] != "_"}
 
 
+def delete_items(obj, keys):
+    """Remove all 'keys' from 'obj'"""
+    for key in keys:
+        if key in obj:
+            del obj[key]
+
+
 def number_to_string(value, numbers=(int, float)):
     """Convert numbers (int, float) to string; Return everything else as is."""
     return str(value) if value.__class__ in numbers else value
@@ -112,6 +120,64 @@ def dump_json(obj, fp=sys.stdout, ensure_ascii=True, indent=4):
     fp.write("\n")
 
 
+def dump_response(response, fp, *,
+                  headers=False, content=True, hide_auth=True):
+    """Write the contents of 'response' into a file-like object"""
+
+    if headers:
+        request = response.request
+        req_headers = request.headers.copy()
+        res_headers = response.headers.copy()
+        outfmt = """\
+{request.method} {request.url}
+Status: {response.status_code} {response.reason}
+
+Request Headers
+---------------
+{request_headers}
+
+Response Headers
+----------------
+{response_headers}
+"""
+        if hide_auth:
+            authorization = req_headers.get("Authorization")
+            if authorization:
+                atype, sep, _ = authorization.partition(" ")
+                req_headers["Authorization"] = atype + " ***" if sep else "***"
+
+            cookie = req_headers.get("Cookie")
+            if cookie:
+                req_headers["Cookie"] = ";".join(
+                    c.partition("=")[0] + "=***"
+                    for c in cookie.split(";")
+                )
+
+            set_cookie = res_headers.get("Set-Cookie")
+            if set_cookie:
+                res_headers["Set-Cookie"] = re.sub(
+                    r"(^|, )([^ =]+)=[^,;]*", r"\1\2=***", set_cookie,
+                )
+
+        fp.write(outfmt.format(
+            request=request,
+            response=response,
+            request_headers="\n".join(
+                name + ": " + value
+                for name, value in req_headers.items()
+            ),
+            response_headers="\n".join(
+                name + ": " + value
+                for name, value in res_headers.items()
+            ),
+        ).encode())
+
+    if content:
+        if headers:
+            fp.write(b"\nContent\n-------\n")
+        fp.write(response.content)
+
+
 def expand_path(path):
     """Expand environment variables and tildes (~)"""
     if not path:
@@ -119,6 +185,81 @@ def expand_path(path):
     if not isinstance(path, str):
         path = os.path.join(*path)
     return os.path.expandvars(os.path.expanduser(path))
+
+
+def remove_file(path):
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+
+
+def remove_directory(path):
+    try:
+        os.rmdir(path)
+    except OSError:
+        pass
+
+
+def load_cookiestxt(fp):
+    """Parse a Netscape cookies.txt file and return a list of its Cookies"""
+    cookies = []
+
+    for line in fp:
+
+        line = line.lstrip()
+        # strip '#HttpOnly_'
+        if line.startswith("#HttpOnly_"):
+            line = line[10:]
+        # ignore empty lines and comments
+        if not line or line[0] in ("#", "$"):
+            continue
+        # strip trailing '\n'
+        if line[-1] == "\n":
+            line = line[:-1]
+
+        domain, domain_specified, path, secure, expires, name, value = \
+            line.split("\t")
+        if not name:
+            name = value
+            value = None
+
+        cookies.append(Cookie(
+            0, name, value,
+            None, False,
+            domain,
+            domain_specified == "TRUE",
+            domain.startswith("."),
+            path, False,
+            secure == "TRUE",
+            None if expires == "0" or not expires else expires,
+            False, None, None, {},
+        ))
+
+    return cookies
+
+
+def save_cookiestxt(fp, cookies):
+    """Write 'cookies' in Netscape cookies.txt format to 'fp'"""
+    fp.write("# Netscape HTTP Cookie File\n\n")
+
+    for cookie in cookies:
+        if cookie.value is None:
+            name = ""
+            value = cookie.name
+        else:
+            name = cookie.name
+            value = cookie.value
+
+        fp.write("\t".join((
+            cookie.domain,
+            "TRUE" if cookie.domain.startswith(".") else "FALSE",
+            cookie.path,
+            "TRUE" if cookie.secure else "FALSE",
+            "0" if cookie.expires is None else str(cookie.expires),
+            name,
+            value,
+        )) + "\n")
 
 
 def code_to_language(code, default=None):
@@ -194,6 +335,8 @@ class UniversalNone():
 
 
 NONE = UniversalNone()
+WINDOWS = (os.name == "nt")
+SENTINEL = object()
 
 
 def build_predicate(predicates):
@@ -405,63 +548,85 @@ class Formatter():
                 self.format_map = self.fields[0][1]
             else:
                 self.format_map = lambda _: format_string
-            del self.result
-            del self.fields
+            del self.result, self.fields
 
-    def format_map(self, kwargs):
-        """Apply 'kwargs' to the initial format_string and return its result"""
+    def format_map(self, kwdict):
+        """Apply 'kwdict' to the initial format_string and return its result"""
+        result = self.result
         for index, func in self.fields:
-            self.result[index] = func(kwargs)
-        return "".join(self.result)
+            result[index] = func(kwdict)
+        return "".join(result)
 
     def _field_access(self, field_name, format_spec, conversion):
-        first, rest = _string.formatter_field_name_split(field_name)
+        fmt = self._parse_format_spec(format_spec, conversion)
 
+        if "|" in field_name:
+            return self._apply_list([
+                self._parse_field_name(fn)
+                for fn in field_name.split("|")
+            ], fmt)
+        else:
+            key, funcs = self._parse_field_name(field_name)
+            if funcs:
+                return self._apply(key, funcs, fmt)
+            return self._apply_simple(key, fmt)
+
+    @staticmethod
+    def _parse_field_name(field_name):
+        first, rest = _string.formatter_field_name_split(field_name)
         funcs = []
+
         for is_attr, key in rest:
             if is_attr:
                 func = operator.attrgetter
-            elif ":" in key:
-                func = self._slicegetter
             else:
                 func = operator.itemgetter
+                try:
+                    if ":" in key:
+                        start, _, stop = key.partition(":")
+                        stop, _, step = stop.partition(":")
+                        start = int(start) if start else None
+                        stop = int(stop) if stop else None
+                        step = int(step) if step else None
+                        key = slice(start, stop, step)
+                except TypeError:
+                    pass  # key is an integer
+
             funcs.append(func(key))
 
-        if conversion:
-            funcs.append(self.CONVERSIONS[conversion])
+        return first, funcs
 
-        if format_spec:
-            if format_spec[0] == "?":
-                func = self._format_optional
-            elif format_spec[0] == "L":
-                func = self._format_maxlen
-            elif format_spec[0] == "J":
-                func = self._format_join
-            elif format_spec[0] == "R":
-                func = self._format_replace
-            else:
-                func = self._format_default
-            fmt = func(format_spec)
+    def _parse_format_spec(self, format_spec, conversion):
+        fmt = self._build_format_func(format_spec)
+        if not conversion:
+            return fmt
+
+        conversion = self.CONVERSIONS[conversion]
+        if fmt is format:
+            return conversion
         else:
-            fmt = str
+            def chain(obj):
+                return fmt(conversion(obj))
+            return chain
 
-        if funcs:
-            return self._apply(first, funcs, fmt)
-        return self._apply_simple(first, fmt)
-
-    def _apply_simple(self, key, fmt):
-        def wrap(obj):
-            if key in obj:
-                obj = obj[key]
-            else:
-                obj = self.default
-            return fmt(obj)
-        return wrap
+    def _build_format_func(self, format_spec):
+        if format_spec:
+            fmt = format_spec[0]
+            if fmt == "?":
+                return self._parse_optional(format_spec)
+            if fmt == "L":
+                return self._parse_maxlen(format_spec)
+            if fmt == "J":
+                return self._parse_join(format_spec)
+            if fmt == "R":
+                return self._parse_replace(format_spec)
+            return self._default_format(format_spec)
+        return format
 
     def _apply(self, key, funcs, fmt):
-        def wrap(obj):
+        def wrap(kwdict):
             try:
-                obj = obj[key]
+                obj = kwdict[key]
                 for func in funcs:
                     obj = func(obj)
             except Exception:
@@ -469,54 +634,66 @@ class Formatter():
             return fmt(obj)
         return wrap
 
-    @staticmethod
-    def _slicegetter(key):
-        start, _, stop = key.partition(":")
-        stop, _, step = stop.partition(":")
-        start = int(start) if start else None
-        stop = int(stop) if stop else None
-        step = int(step) if step else None
-        return operator.itemgetter(slice(start, stop, step))
+    def _apply_simple(self, key, fmt):
+        def wrap(kwdict):
+            return fmt(kwdict[key] if key in kwdict else self.default)
+        return wrap
 
-    @staticmethod
-    def _format_optional(format_spec):
-        def wrap(obj):
-            if not obj:
-                return ""
-            return before + format(obj, format_spec) + after
+    def _apply_list(self, lst, fmt):
+        def wrap(kwdict):
+            for key, funcs in lst:
+                try:
+                    obj = kwdict[key]
+                    for func in funcs:
+                        obj = func(obj)
+                    if obj is not None:
+                        break
+                except Exception:
+                    pass
+            else:
+                obj = self.default
+            return fmt(obj)
+        return wrap
+
+    def _parse_optional(self, format_spec):
         before, after, format_spec = format_spec.split("/", 2)
         before = before[1:]
-        return wrap
+        fmt = self._build_format_func(format_spec)
 
-    @staticmethod
-    def _format_maxlen(format_spec):
-        def wrap(obj):
-            obj = format(obj, format_spec)
-            return obj if len(obj) <= maxlen else replacement
+        def optional(obj):
+            return before + fmt(obj) + after if obj else ""
+        return optional
+
+    def _parse_maxlen(self, format_spec):
         maxlen, replacement, format_spec = format_spec.split("/", 2)
         maxlen = text.parse_int(maxlen[1:])
-        return wrap
+        fmt = self._build_format_func(format_spec)
 
-    @staticmethod
-    def _format_join(format_spec):
-        def wrap(obj):
-            obj = separator.join(obj)
-            return format(obj, format_spec)
+        def mlen(obj):
+            obj = fmt(obj)
+            return obj if len(obj) <= maxlen else replacement
+        return mlen
+
+    def _parse_join(self, format_spec):
         separator, _, format_spec = format_spec.partition("/")
         separator = separator[1:]
-        return wrap
+        fmt = self._build_format_func(format_spec)
 
-    @staticmethod
-    def _format_replace(format_spec):
-        def wrap(obj):
-            obj = obj.replace(old, new)
-            return format(obj, format_spec)
+        def join(obj):
+            return fmt(separator.join(obj))
+        return join
+
+    def _parse_replace(self, format_spec):
         old, new, format_spec = format_spec.split("/", 2)
         old = old[1:]
-        return wrap
+        fmt = self._build_format_func(format_spec)
+
+        def replace(obj):
+            return fmt(obj.replace(old, new))
+        return replace
 
     @staticmethod
-    def _format_default(format_spec):
+    def _default_format(format_spec):
         def wrap(obj):
             return format(obj, format_spec)
         return wrap
@@ -544,38 +721,42 @@ class PathFormat():
             raise exception.DirectoryFormatError(exc)
 
         self.directory = self.realdirectory = ""
-        self.filename = ""
-        self.extension = ""
-        self.prefix = ""
-        self.kwdict = {}
-        self.delete = False
+        self.filename = self.extension = self.prefix = ""
         self.path = self.realpath = self.temppath = ""
+        self.kwdict = {}
+        self.delete = self._create_directory = False
 
-        basedir = expand_path(
-            extractor.config("base-directory", (".", "gallery-dl")))
-        if os.altsep and os.altsep in basedir:
-            basedir = basedir.replace(os.altsep, os.sep)
-        if basedir[-1] != os.sep:
-            basedir += os.sep
+        basedir = extractor._parentdir
+        if not basedir:
+            basedir = expand_path(
+                extractor.config("base-directory", (".", "gallery-dl")))
+            if os.altsep and os.altsep in basedir:
+                basedir = basedir.replace(os.altsep, os.sep)
+            if basedir[-1] != os.sep:
+                basedir += os.sep
         self.basedirectory = basedir
 
         restrict = extractor.config("path-restrict", "auto")
+        replace = extractor.config("path-replace", "_")
+
         if restrict == "auto":
-            restrict = "\\\\|/<>:\"?*" if os.name == "nt" else "/"
+            restrict = "\\\\|/<>:\"?*" if WINDOWS else "/"
         elif restrict == "unix":
             restrict = "/"
         elif restrict == "windows":
             restrict = "\\\\|/<>:\"?*"
+        self.clean_segment = self._build_cleanfunc(restrict, replace)
 
         remove = extractor.config("path-remove", "\x00-\x1f\x7f")
-
-        self.clean_segment = self._build_cleanfunc(restrict, "_")
         self.clean_path = self._build_cleanfunc(remove, "")
 
     @staticmethod
     def _build_cleanfunc(chars, repl):
         if not chars:
             return lambda x: x
+        elif isinstance(chars, dict):
+            def func(x, table=str.maketrans(chars)):
+                return x.translate(table)
         elif len(chars) == 1:
             def func(x, c=chars, r=repl):
                 return x.replace(c, r)
@@ -602,15 +783,19 @@ class PathFormat():
 
     def _enum_file(self):
         num = 1
-        while True:
-            self.prefix = str(num) + "."
-            self.set_extension(self.extension, False)
-            if not os.path.exists(self.realpath):
-                return False
-            num += 1
+        try:
+            while True:
+                self.prefix = str(num) + "."
+                self.set_extension(self.extension, False)
+                os.stat(self.realpath)  # raises OSError if file doesn't exist
+                num += 1
+        except OSError:
+            pass
+        return False
 
     def set_directory(self, kwdict):
         """Build directory path and create it if necessary"""
+        self.kwdict = kwdict
 
         # Build path segments by applying 'kwdict' to directory format strings
         segments = []
@@ -618,12 +803,15 @@ class PathFormat():
         try:
             for formatter in self.directory_formatters:
                 segment = formatter(kwdict).strip()
+                if WINDOWS:
+                    # remove trailing dots and spaces (#647)
+                    segment = segment.rstrip(". ")
                 if segment:
                     append(self.clean_segment(segment))
         except Exception as exc:
             raise exception.DirectoryFormatError(exc)
 
-        # Join path segements
+        # Join path segments
         sep = os.sep
         directory = self.clean_path(self.basedirectory + sep.join(segments))
 
@@ -632,7 +820,7 @@ class PathFormat():
             directory += sep
         self.directory = directory
 
-        if os.name == "nt":
+        if WINDOWS:
             # Enable longer-than-260-character paths on Windows
             directory = "\\\\?\\" + os.path.abspath(directory)
 
@@ -641,9 +829,7 @@ class PathFormat():
                 directory += sep
 
         self.realdirectory = directory
-
-        # Create directory tree
-        os.makedirs(self.realdirectory, exist_ok=True)
+        self._create_directory = True
 
     def set_filename(self, kwdict):
         """Set general filename data"""
@@ -653,6 +839,8 @@ class PathFormat():
 
         if self.extension:
             self.build_path()
+        else:
+            self.filename = ""
 
     def set_extension(self, extension, real=True):
         """Set filename extension"""
@@ -680,6 +868,9 @@ class PathFormat():
 
     def build_path(self):
         """Combine directory and filename to full paths"""
+        if self._create_directory:
+            os.makedirs(self.realdirectory, exist_ok=True)
+            self._create_directory = False
         self.filename = filename = self.build_filename()
         self.path = self.directory + filename
         self.realpath = self.realdirectory + filename
@@ -721,16 +912,15 @@ class PathFormat():
                 shutil.copyfile(self.temppath, self.realpath)
                 os.unlink(self.temppath)
 
-        if "_mtime" in self.kwdict:
+        mtime = self.kwdict.get("_mtime")
+        if mtime:
             # Set file modification time
-            mtime = self.kwdict["_mtime"]
-            if mtime:
-                try:
-                    if isinstance(mtime, str):
-                        mtime = mktime_tz(parsedate_tz(mtime))
-                    os.utime(self.realpath, (time.time(), mtime))
-                except Exception:
-                    pass
+            try:
+                if isinstance(mtime, str):
+                    mtime = mktime_tz(parsedate_tz(mtime))
+                os.utime(self.realpath, (time.time(), mtime))
+            except Exception:
+                pass
 
 
 class DownloadArchive():
@@ -740,21 +930,28 @@ class DownloadArchive():
         con.isolation_level = None
         self.close = con.close
         self.cursor = con.cursor()
-        self.cursor.execute("CREATE TABLE IF NOT EXISTS archive "
-                            "(entry PRIMARY KEY) WITHOUT ROWID")
+
+        try:
+            self.cursor.execute("CREATE TABLE IF NOT EXISTS archive "
+                                "(entry PRIMARY KEY) WITHOUT ROWID")
+        except sqlite3.OperationalError:
+            # fallback for missing WITHOUT ROWID support (#553)
+            self.cursor.execute("CREATE TABLE IF NOT EXISTS archive "
+                                "(entry PRIMARY KEY)")
+
         self.keygen = (extractor.category + extractor.config(
             "archive-format", extractor.archive_fmt)
         ).format_map
 
     def __contains__(self, kwdict):
         """Return True if the item described by 'kwdict' exists in archive"""
-        key = self.keygen(kwdict)
+        key = kwdict["_archive_key"] = self.keygen(kwdict)
         self.cursor.execute(
             "SELECT 1 FROM archive WHERE entry=? LIMIT 1", (key,))
         return self.cursor.fetchone()
 
     def add(self, kwdict):
         """Add item described by 'kwdict' to archive"""
-        key = self.keygen(kwdict)
+        key = kwdict.get("_archive_key") or self.keygen(kwdict)
         self.cursor.execute(
             "INSERT OR IGNORE INTO archive VALUES (?)", (key,))

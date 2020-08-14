@@ -1,14 +1,15 @@
 # -*- coding: utf-8 -*-
 
-# Copyright 2015-2019 Mike Fährmann
+# Copyright 2015-2020 Mike Fährmann
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
 # published by the Free Software Foundation.
 
-"""Extract images from https://hitomi.la/"""
+"""Extractors for https://hitomi.la/"""
 
-from .common import GalleryExtractor
+from .common import GalleryExtractor, Extractor, Message
+from .nozomi import decode_nozomi
 from .. import text, util
 import string
 import json
@@ -23,24 +24,32 @@ class HitomiGalleryExtractor(GalleryExtractor):
                r"/(?:[^/?&#]+-)?(\d+)")
     test = (
         ("https://hitomi.la/galleries/867789.html", {
-            "pattern": r"https://aa.hitomi.la/galleries/867789/\d+.jpg",
+            "pattern": r"https://[a-c]a.hitomi.la/images/./../[0-9a-f]+.jpg",
             "keyword": "6701f8f588f119ef84cd29bdf99a399417b0a6a2",
             "count": 16,
         }),
+        # download test
         ("https://hitomi.la/galleries/1401410.html", {
-            # download test
             "range": "1",
             "content": "b3ca8c6c8cc5826cf8b4ceb7252943abad7b8b4c",
         }),
+        # Game CG with scenes (#321)
         ("https://hitomi.la/galleries/733697.html", {
-            # Game CG with scenes (#321)
-            "url": "c2a84185f467450b8b9b72fbe40c0649029ce007",
+            "url": "b4cbc76032852db4a655bf6a2c4d58eae8153c8e",
             "count": 210,
         }),
+        # fallback for galleries only available through /reader/ URLs
         ("https://hitomi.la/galleries/1045954.html", {
-            # fallback for galleries only available through /reader/ URLs
-            "url": "055c898a36389719799d6bce76889cc4ea4421fc",
+            "url": "f3aa914ad148437f72d307268fa0d250eabe8dab",
             "count": 1413,
+        }),
+        # gallery with "broken" redirect
+        ("https://hitomi.la/cg/scathacha-sama-okuchi-ecchi-1291900.html", {
+            "count": 10,
+        }),
+        # no tags
+        ("https://hitomi.la/cg/1615823.html", {
+            "count": 22,
         }),
         ("https://hitomi.la/manga/amazon-no-hiyaku-867789.html"),
         ("https://hitomi.la/manga/867789.html"),
@@ -51,80 +60,125 @@ class HitomiGalleryExtractor(GalleryExtractor):
     )
 
     def __init__(self, match):
-        self.gallery_id = match.group(1)
-        self.fallback = False
-        url = "{}/galleries/{}.html".format(self.root, self.gallery_id)
+        gid = match.group(1)
+        url = "https://ltn.hitomi.la/galleries/{}.js".format(gid)
         GalleryExtractor.__init__(self, match, url)
+        self.info = None
+        self.session.headers["Referer"] = "{}/reader/{}.html".format(
+            self.root, gid)
 
-    def request(self, url, **kwargs):
-        response = GalleryExtractor.request(self, url, fatal=False, **kwargs)
-        if response.status_code == 404:
-            self.fallback = True
-            url = url.replace("/galleries/", "/reader/")
-            response = GalleryExtractor.request(self, url, **kwargs)
-        elif b"<title>Redirect</title>" in response.content:
+    def metadata(self, page):
+        self.info = info = json.loads(page.partition("=")[2])
+
+        data = self._data_from_gallery_info(info)
+        if self.config("metadata", True):
+            data.update(self._data_from_gallery_page(info))
+        return data
+
+    def _data_from_gallery_info(self, info):
+        language = info.get("language")
+        if language:
+            language = language.capitalize()
+
+        date = info.get("date")
+        if date:
+            date += ":00"
+
+        tags = []
+        for tinfo in info.get("tags") or ():
+            tag = string.capwords(tinfo["tag"])
+            if tinfo.get("female"):
+                tag += " ♀"
+            elif tinfo.get("male"):
+                tag += " ♂"
+            tags.append(tag)
+
+        return {
+            "gallery_id": text.parse_int(info["id"]),
+            "title"     : info["title"],
+            "type"      : info["type"].capitalize(),
+            "language"  : language,
+            "lang"      : util.language_to_code(language),
+            "date"      : text.parse_datetime(date, "%Y-%m-%d %H:%M:%S%z"),
+            "tags"      : tags,
+        }
+
+    def _data_from_gallery_page(self, info):
+        url = "{}/galleries/{}.html".format(self.root, info["id"])
+
+        # follow redirects
+        while True:
+            response = self.request(url, fatal=False)
+            if b"<title>Redirect</title>" not in response.content:
+                break
             url = text.extract(response.text, "href='", "'")[0]
             if not url.startswith("http"):
                 url = text.urljoin(self.root, url)
-            response = self.request(url, **kwargs)
-        return response
 
-    def metadata(self, page):
-        if self.fallback:
-            return {
-                "gallery_id": text.parse_int(self.gallery_id),
-                "title": text.unescape(text.extract(
-                    page, "<title>", "<")[0].rpartition(" | ")[0]),
-            }
+        if response.status_code >= 400:
+            return {}
 
-        extr = text.extract_from(page, page.index('<h1><a href="/reader/'))
-        data = {
-            "gallery_id": text.parse_int(self.gallery_id),
-            "title"     : text.unescape(extr('.html">', '<').strip()),
-            "artist"    : self._prep(extr('<h2>', '</h2>')),
-            "group"     : self._prep(extr('<td>Group</td><td>', '</td>')),
-            "type"      : self._prep_1(extr('<td>Type</td><td>', '</td>')),
-            "language"  : self._prep_1(extr('<td>Language</td><td>', '</td>')),
-            "parody"    : self._prep(extr('<td>Series</td><td>', '</td>')),
-            "characters": self._prep(extr('<td>Characters</td><td>', '</td>')),
-            "tags"      : self._prep(extr('<td>Tags</td><td>', '</td>')),
-            "date"      : self._date(extr('<span class="date">', '</span>')),
+        def prep(value):
+            return [
+                text.unescape(string.capwords(v))
+                for v in text.extract_iter(value or "", '.html">', '<')
+            ]
+
+        extr = text.extract_from(response.text)
+        return {
+            "artist"    : prep(extr('<h2>', '</h2>')),
+            "group"     : prep(extr('<td>Group</td><td>', '</td>')),
+            "parody"    : prep(extr('<td>Series</td><td>', '</td>')),
+            "characters": prep(extr('<td>Characters</td><td>', '</td>')),
         }
-        if data["language"] == "N/a":
-            data["language"] = None
-        data["lang"] = util.language_to_code(data["language"])
-        return data
 
-    def images(self, page):
-        # see https://ltn.hitomi.la/common.js
-        offset = text.parse_int(self.gallery_id[-1]) % 3
-        subdomain = chr(97 + offset) + "a"
-        base = "https://{}.hitomi.la/galleries/{}/".format(
-            subdomain, self.gallery_id)
+    def images(self, _):
+        result = []
+        for image in self.info["files"]:
+            ihash = image["hash"]
+            idata = text.nameext_from_url(image["name"])
 
-        # set Referer header before image downloads (#239)
-        self.session.headers["Referer"] = self.gallery_url
+            # see https://ltn.hitomi.la/common.js
+            inum = int(ihash[-3:-1], 16)
+            frontends = 2 if inum < 0x30 else 3
+            inum = 1 if inum < 0x09 else inum
 
-        # get 'galleryinfo'
-        url = "https://ltn.hitomi.la/galleries/{}.js".format(self.gallery_id)
-        page = self.request(url).text
+            url = "https://{}a.hitomi.la/images/{}/{}/{}.{}".format(
+                chr(97 + (inum % frontends)),
+                ihash[-1], ihash[-3:-1], ihash,
+                idata["extension"],
+            )
+            result.append((url, idata))
+        return result
 
-        return [
-            (base + image["name"], None)
-            for image in json.loads(page.partition("=")[2])
-        ]
 
-    @staticmethod
-    def _prep(value):
-        return [
-            text.unescape(string.capwords(v))
-            for v in text.extract_iter(value or "", '.html">', '<')
-        ]
+class HitomiTagExtractor(Extractor):
+    """Extractor for galleries from tag searches on hitomi.la"""
+    category = "hitomi"
+    subcategory = "tag"
+    pattern = (r"(?:https?://)?hitomi\.la/"
+               r"(tag|artist|group|series|type|character)/"
+               r"([^/?&#]+)-\d+\.html")
+    test = (
+        ("https://hitomi.la/tag/screenshots-japanese-1.html", {
+            "pattern": HitomiGalleryExtractor.pattern,
+            "count": ">= 35",
+        }),
+        ("https://hitomi.la/artist/a1-all-1.html"),
+        ("https://hitomi.la/group/initial%2Dg-all-1.html"),
+        ("https://hitomi.la/series/amnesia-all-1.html"),
+        ("https://hitomi.la/type/doujinshi-all-1.html"),
+        ("https://hitomi.la/character/a2-all-1.html"),
+    )
 
-    @staticmethod
-    def _prep_1(value):
-        return text.remove_html(value).capitalize()
+    def __init__(self, match):
+        Extractor.__init__(self, match)
+        self.type, self.tag = match.groups()
 
-    @staticmethod
-    def _date(value):
-        return text.parse_datetime(value + ":00", "%Y-%m-%d %H:%M:%S%z")
+    def items(self):
+        url = "https://ltn.hitomi.la/{}/{}.nozomi".format(self.type, self.tag)
+        data = {"_extractor": HitomiGalleryExtractor}
+
+        for gallery_id in decode_nozomi(self.request(url).content):
+            url = "https://hitomi.la/galleries/{}.html".format(gallery_id)
+            yield Message.Queue, url, data

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Copyright 2014-2019 Mike Fährmann
+# Copyright 2014-2020 Mike Fährmann
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
@@ -9,7 +9,6 @@
 """Common classes and constants used by downloader modules."""
 
 import os
-import logging
 from .. import config, util
 
 
@@ -17,12 +16,12 @@ class DownloaderBase():
     """Base class for downloaders"""
     scheme = ""
 
-    def __init__(self, extractor, output):
-        self.session = extractor.session
-        self.out = output
-        self.log = logging.getLogger("downloader." + self.scheme)
+    def __init__(self, job):
+        self.out = job.out
+        self.session = job.extractor.session
         self.part = self.config("part", True)
         self.partdir = self.config("part-directory")
+        self.log = job.get_logger("downloader." + self.scheme)
 
         if self.partdir:
             self.partdir = util.expand_path(self.partdir)

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Copyright 2014-2019 Mike Fährmann
+# Copyright 2014-2020 Mike Fährmann
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
@@ -8,42 +8,46 @@
 
 """Downloader module for http:// and https:// URLs"""
 
-import os
 import time
 import mimetypes
 from requests.exceptions import RequestException, ConnectionError, Timeout
 from .common import DownloaderBase
-from .. import text
+from .. import text, util
 
+from ssl import SSLError
 try:
-    from OpenSSL.SSL import Error as SSLError
+    from OpenSSL.SSL import Error as OpenSSLError
 except ImportError:
-    from ssl import SSLError
+    OpenSSLError = SSLError
 
 
 class HttpDownloader(DownloaderBase):
     scheme = "http"
 
-    def __init__(self, extractor, output):
-        DownloaderBase.__init__(self, extractor, output)
+    def __init__(self, job):
+        DownloaderBase.__init__(self, job)
+        extractor = job.extractor
+        self.chunk_size = 16384
+        self.downloading = False
+
         self.adjust_extension = self.config("adjust-extensions", True)
         self.retries = self.config("retries", extractor._retries)
         self.timeout = self.config("timeout", extractor._timeout)
         self.verify = self.config("verify", extractor._verify)
         self.mtime = self.config("mtime", True)
         self.rate = self.config("rate")
-        self.downloading = False
-        self.chunk_size = 16384
 
         if self.retries < 0:
             self.retries = float("inf")
         if self.rate:
             rate = text.parse_bytes(self.rate)
-            if not rate:
+            if rate:
+                if rate < self.chunk_size:
+                    self.chunk_size = rate
+                self.rate = rate
+                self.receive = self._receive_rate
+            else:
                 self.log.warning("Invalid rate limit (%r)", self.rate)
-            elif rate < self.chunk_size:
-                self.chunk_size = rate
-            self.rate = rate
 
     def download(self, url, pathfmt):
         try:
@@ -54,10 +58,7 @@ class HttpDownloader(DownloaderBase):
         finally:
             # remove file from incomplete downloads
             if self.downloading and not self.part:
-                try:
-                    os.unlink(pathfmt.temppath)
-                except (OSError, AttributeError):
-                    pass
+                util.remove_file(pathfmt.temppath)
 
     def _download_impl(self, url, pathfmt):
         response = None
@@ -96,7 +97,7 @@ class HttpDownloader(DownloaderBase):
                 msg = str(exc)
                 continue
             except Exception as exc:
-                self.log.warning("%s", exc)
+                self.log.warning(exc)
                 return False
 
             # check response
@@ -113,7 +114,7 @@ class HttpDownloader(DownloaderBase):
                 msg = "'{} {}' for '{}'".format(code, response.reason, url)
                 if code == 429 or 500 <= code < 600:  # Server Error
                     continue
-                self.log.warning("%s", msg)
+                self.log.warning(msg)
                 return False
             size = text.parse_int(size)
 
@@ -143,7 +144,7 @@ class HttpDownloader(DownloaderBase):
                 # download content
                 try:
                     self.receive(response, file)
-                except (RequestException, SSLError) as exc:
+                except (RequestException, SSLError, OpenSSLError) as exc:
                     msg = str(exc)
                     print()
                     continue
@@ -165,28 +166,41 @@ class HttpDownloader(DownloaderBase):
 
         self.downloading = False
         if self.mtime:
-            pathfmt.kwdict["_mtime"] = response.headers.get("Last-Modified")
+            pathfmt.kwdict.setdefault(
+                "_mtime", response.headers.get("Last-Modified"))
+        else:
+            pathfmt.kwdict["_mtime"] = None
+
         return True
 
     def receive(self, response, file):
-        if self.rate:
-            total = 0            # total amount of bytes received
-            start = time.time()  # start time
+        for data in response.iter_content(self.chunk_size):
+            file.write(data)
+
+    def _receive_rate(self, response, file):
+        t1 = time.time()
+        rt = self.rate
 
         for data in response.iter_content(self.chunk_size):
             file.write(data)
 
-            if self.rate:
-                total += len(data)
-                expected = total / self.rate  # expected elapsed time
-                delta = time.time() - start   # actual elapsed time since start
-                if delta < expected:
-                    # sleep if less time passed than expected
-                    time.sleep(expected - delta)
+            t2 = time.time()           # current time
+            actual = t2 - t1           # actual elapsed time
+            expected = len(data) / rt  # expected elapsed time
+
+            if actual < expected:
+                # sleep if less time elapsed than expected
+                time.sleep(expected - actual)
+                t1 = time.time()
+            else:
+                t1 = t2
 
     def get_extension(self, response):
         mtype = response.headers.get("Content-Type", "image/jpeg")
         mtype = mtype.partition(";")[0]
+
+        if "/" not in mtype:
+            mtype = "image/" + mtype
 
         if mtype in MIMETYPE_MAP:
             return MIMETYPE_MAP[mtype]
@@ -226,8 +240,14 @@ MIMETYPE_MAP = {
     "image/png": "png",
     "image/gif": "gif",
     "image/bmp": "bmp",
+    "image/x-bmp": "bmp",
+    "image/x-ms-bmp": "bmp",
     "image/webp": "webp",
     "image/svg+xml": "svg",
+
+    "image/vnd.adobe.photoshop": "psd",
+    "image/x-photoshop": "psd",
+    "application/x-photoshop": "psd",
 
     "video/webm": "webm",
     "video/ogg": "ogg",
@@ -242,6 +262,7 @@ MIMETYPE_MAP = {
     "application/zip": "zip",
     "application/x-zip": "zip",
     "application/x-zip-compressed": "zip",
+    "application/rar": "rar",
     "application/x-rar": "rar",
     "application/x-rar-compressed": "rar",
     "application/x-7z-compressed": "7z",

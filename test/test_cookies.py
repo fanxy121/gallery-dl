@@ -1,22 +1,23 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-# Copyright 2017-2019 Mike Fährmann
+# Copyright 2017-2020 Mike Fährmann
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
 # published by the Free Software Foundation.
 
+import os
+import sys
 import unittest
 from unittest import mock
 
 import logging
 import tempfile
-import http.cookiejar
 from os.path import join
 
-import gallery_dl.config as config
-import gallery_dl.extractor as extractor
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from gallery_dl import config, extractor  # noqa E402
 
 
 class TestCookiejar(unittest.TestCase):
@@ -34,7 +35,7 @@ class TestCookiejar(unittest.TestCase):
         cls.invalid_cookiefile = join(cls.path.name, "invalid.txt")
         with open(cls.invalid_cookiefile, "w") as file:
             file.write("""# asd
-.example.org\tTRUE\t/\tFALSE\t253402210800\tNAME\tVALUE
+.example.org\tTRUE/FALSE\t253402210800\tNAME\tVALUE
 """)
 
     @classmethod
@@ -55,7 +56,7 @@ class TestCookiejar(unittest.TestCase):
         self.assertEqual(cookie.value , "VALUE")
 
     def test_invalid_cookiefile(self):
-        self._test_warning(self.invalid_cookiefile, http.cookiejar.LoadError)
+        self._test_warning(self.invalid_cookiefile, ValueError)
 
     def test_invalid_filename(self):
         self._test_warning(join(self.path.name, "nothing"), FileNotFoundError)

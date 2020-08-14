@@ -15,6 +15,8 @@ import datetime
 import urllib.parse
 
 
+HTML_RE = re.compile("<[^>]+>")
+
 INVALID_XML_CHARS = (
     "\x00", "\x01", "\x02", "\x03", "\x04", "\x05", "\x06", "\x07",
     "\x08", "\x0b", "\x0c", "\x0e", "\x0f", "\x10", "\x11", "\x12",
@@ -39,7 +41,7 @@ def clean_xml(xmldata, repl=""):
 def remove_html(txt, repl=" ", sep=" "):
     """Remove html-tags from a string"""
     try:
-        txt = re.sub("<[^>]+>", repl, txt)
+        txt = HTML_RE.sub(repl, txt)
     except TypeError:
         return ""
     if sep:
@@ -51,11 +53,18 @@ def split_html(txt, sep=None):
     """Split input string by html-tags"""
     try:
         return [
-            x.strip() for x in re.split("<[^>]+>", txt)
+            x.strip() for x in HTML_RE.split(txt)
             if x and not x.isspace()
         ]
     except TypeError:
         return []
+
+
+def ensure_http_scheme(url, scheme="https://"):
+    """Prepend 'scheme' to 'url' if it doesn't have one"""
+    if url and not url.startswith(("https://", "http://")):
+        return scheme + url.lstrip("/:")
+    return url
 
 
 def filename_from_url(url):
@@ -231,7 +240,7 @@ def parse_timestamp(ts, default=None):
         return default
 
 
-def parse_datetime(date_string, format="%Y-%m-%dT%H:%M:%S%z"):
+def parse_datetime(date_string, format="%Y-%m-%dT%H:%M:%S%z", utcoffset=0):
     """Create a datetime object by parsing 'date_string'"""
     try:
         if format.endswith("%z") and date_string[-3] == ":":
@@ -242,7 +251,14 @@ def parse_datetime(date_string, format="%Y-%m-%dT%H:%M:%S%z"):
         d = datetime.datetime.strptime(ds, format)
         o = d.utcoffset()
         if o is not None:
-            d = d.replace(tzinfo=None) - o  # convert to naive UTC
+            # convert to naive UTC
+            d = d.replace(tzinfo=None, microsecond=0) - o
+        else:
+            if d.microsecond:
+                d = d.replace(microsecond=0)
+            if utcoffset:
+                # apply manual UTC offset
+                d += datetime.timedelta(0, utcoffset * -3600)
         return d
     except (TypeError, IndexError, KeyError):
         return None

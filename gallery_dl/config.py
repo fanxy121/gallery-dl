@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Copyright 2015-2019 Mike Fährmann
+# Copyright 2015-2020 Mike Fährmann
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
@@ -22,8 +22,9 @@ log = logging.getLogger("config")
 
 _config = {}
 
-if os.name == "nt":
+if util.WINDOWS:
     _default_configs = [
+        r"%APPDATA%\gallery-dl\config.json",
         r"%USERPROFILE%\gallery-dl\config.json",
         r"%USERPROFILE%\gallery-dl.conf",
     ]
@@ -33,6 +34,14 @@ else:
         "${HOME}/.config/gallery-dl/config.json",
         "${HOME}/.gallery-dl.conf",
     ]
+
+
+if getattr(sys, "frozen", False):
+    # look for config file in PyInstaller executable directory (#682)
+    _default_configs.append(os.path.join(
+        os.path.dirname(sys.executable),
+        "gallery-dl.conf",
+    ))
 
 
 # --------------------------------------------------------------------
@@ -57,7 +66,7 @@ def load(files=None, strict=False, fmt="json"):
                 confdict = parsefunc(file)
         except OSError as exc:
             if strict:
-                log.error("%s", exc)
+                log.error(exc)
                 sys.exit(1)
         except Exception as exc:
             log.warning("Could not parse '%s': %s", path, exc)
@@ -99,6 +108,38 @@ def interpolate(path, key, default=None, *, conf=_config):
     return default
 
 
+def interpolate_common(common, paths, key, default=None, *, conf=_config):
+    """Interpolate the value of 'key'
+    using multiple 'paths' along a 'common' ancestor
+    """
+    if key in conf:
+        return conf[key]
+
+    # follow the common path
+    try:
+        for p in common:
+            conf = conf[p]
+            if key in conf:
+                default = conf[key]
+    except Exception:
+        return default
+
+    # try all paths until a value is found
+    value = util.SENTINEL
+    for path in paths:
+        c = conf
+        try:
+            for p in path:
+                c = c[p]
+                if key in c:
+                    value = c[key]
+        except Exception:
+            pass
+        if value is not util.SENTINEL:
+            return value
+    return default
+
+
 def set(path, key, value, *, conf=_config):
     """Set the value of property 'key' for this session"""
     for p in path:
@@ -131,7 +172,6 @@ def unset(path, key, *, conf=_config):
 
 class apply():
     """Context Manager: apply a collection of key-value pairs"""
-    _sentinel = object()
 
     def __init__(self, kvlist):
         self.original = []
@@ -139,12 +179,12 @@ class apply():
 
     def __enter__(self):
         for path, key, value in self.kvlist:
-            self.original.append((path, key, get(path, key, self._sentinel)))
+            self.original.append((path, key, get(path, key, util.SENTINEL)))
             set(path, key, value)
 
     def __exit__(self, etype, value, traceback):
         for path, key, value in self.original:
-            if value is self._sentinel:
+            if value is util.SENTINEL:
                 unset(path, key)
             else:
                 set(path, key, value)

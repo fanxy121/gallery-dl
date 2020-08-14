@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Copyright 2019 Mike Fährmann
+# Copyright 2019-2020 Mike Fährmann
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
@@ -10,6 +10,7 @@
 
 from .common import Extractor, Message
 from .. import text
+import json
 import re
 
 BASE_PATTERN = (
@@ -28,6 +29,7 @@ class BloggerExtractor(Extractor):
 
     def __init__(self, match):
         Extractor.__init__(self, match)
+        self.videos = self.config("videos", True)
         self.blog = match.group(1) or match.group(2)
         self.api = BloggerAPI(self)
 
@@ -41,24 +43,41 @@ class BloggerExtractor(Extractor):
         del blog["selfLink"]
 
         sub = re.compile(r"/s\d+/").sub
-        findall = re.compile(
-            r'src="(https?://\d+\.bp\.blogspot\.com/[^"]+)"').findall
+        findall_image = re.compile(
+            r'src="(https?://\d+\.bp\.blogspot\.com/[^"]+)').findall
+        findall_video = re.compile(
+            r'src="(https?://www\.blogger\.com/video\.g\?token=[^"]+)').findall
 
         for post in self.posts(blog):
-            images = findall(post["content"])
-            if not images:
+            content = post["content"]
+
+            files = findall_image(content)
+            for idx, url in enumerate(files):
+                files[idx] = sub("/s0/", url).replace("http:", "https:", 1)
+
+            if self.videos and 'id="BLOG_video-' in content:
+                page = self.request(post["url"]).text
+                for url in findall_video(page):
+                    page = self.request(url).text
+                    video_config = json.loads(text.extract(
+                        page, 'var VIDEO_CONFIG =', '\n')[0])
+                    files.append(max(
+                        video_config["streams"],
+                        key=lambda x: x["format_id"],
+                    )["play_url"])
+
+            if not files:
                 continue
 
             post["author"] = post["author"]["displayName"]
             post["replies"] = post["replies"]["totalItems"]
-            post["content"] = text.remove_html(post["content"])
+            post["content"] = text.remove_html(content)
             post["date"] = text.parse_datetime(post["published"])
             del post["selfLink"]
             del post["blog"]
 
             yield Message.Directory, {"blog": blog, "post": post}
-            for num, url in enumerate(images, 1):
-                url = sub("/s0/", url).replace("http:", "https:", 1)
+            for num, url in enumerate(files, 1):
                 yield Message.Url, url, text.nameext_from_url(url, {
                     "blog": blog,
                     "post": post,
@@ -80,7 +99,7 @@ class BloggerPostExtractor(BloggerExtractor):
             "pattern": r"https://3.bp.blogspot.com/.*/s0/Icy-Moonrise-.*.jpg",
             "keyword": {
                 "blog": {
-                    "date"       : "type:datetime",
+                    "date"       : "dt:2010-11-21 18:19:42",
                     "description": "",
                     "id"         : "5623928067739466034",
                     "kind"       : "blogger#blog",
@@ -90,12 +109,12 @@ class BloggerPostExtractor(BloggerExtractor):
                     "posts"      : int,
                     "published"  : "2010-11-21T10:19:42-08:00",
                     "updated"    : str,
-                    "url"        : "http://www.julianbunker.com/",
+                    "url"        : "http://julianbphotography.blogspot.com/",
                 },
                 "post": {
                     "author"     : "Julian Bunker",
                     "content"    : str,
-                    "date"       : "type:datetime",
+                    "date"       : "dt:2010-12-26 01:08:00",
                     "etag"       : str,
                     "id"         : "6955139236418998998",
                     "kind"       : "blogger#post",
@@ -109,8 +128,11 @@ class BloggerPostExtractor(BloggerExtractor):
                 "url": str,
             },
         }),
-        ("blogger:http://www.julianbunker.com/2010/12/moon-rise.html", {
-            "url": "9928429fb62f712eb4de80f53625eccecc614aae",
+        ("blogger:http://www.julianbunker.com/2010/12/moon-rise.html"),
+        # video (#587)
+        (("http://cfnmscenesinmovies.blogspot.com/2011/11/"
+          "cfnm-scene-jenna-fischer-in-office.html"), {
+            "pattern": r"https://.+\.googlevideo\.com/videoplayback",
         }),
     )
 
@@ -125,14 +147,14 @@ class BloggerPostExtractor(BloggerExtractor):
 class BloggerBlogExtractor(BloggerExtractor):
     """Extractor for an entire Blogger blog"""
     subcategory = "blog"
-    pattern = BASE_PATTERN + "/?$"
+    pattern = BASE_PATTERN + r"/?$"
     test = (
         ("https://julianbphotography.blogspot.com/", {
             "range": "1-25",
             "count": 25,
             "pattern": r"https://\d\.bp\.blogspot\.com/.*/s0/[^.]+\.jpg",
         }),
-        ("blogger:http://www.julianbunker.com/", {
+        ("blogger:https://www.kefblog.com.ng/", {
             "range": "1-25",
             "count": 25,
         }),
@@ -140,6 +162,34 @@ class BloggerBlogExtractor(BloggerExtractor):
 
     def posts(self, blog):
         return self.api.blog_posts(blog["id"])
+
+
+class BloggerSearchExtractor(BloggerExtractor):
+    """Extractor for search resuls and labels"""
+    subcategory = "search"
+    pattern = BASE_PATTERN + r"/search(?:/?\?q=([^/?&#]+)|/label/([^/?&#]+))"
+    test = (
+        ("https://julianbphotography.blogspot.com/search?q=400mm", {
+            "count": "< 10"
+        }),
+        ("https://dmmagazine.blogspot.com/search/label/D%26D", {
+            "range": "1-25",
+            "count": 25,
+        }),
+    )
+
+    def __init__(self, match):
+        BloggerExtractor.__init__(self, match)
+        query = match.group(3)
+        if query:
+            self.query, self.label = query, None
+        else:
+            self.query, self.label = None, match.group(4)
+
+    def posts(self, blog):
+        if self.query:
+            return self.api.blog_search(blog["id"], text.unquote(self.query))
+        return self.api.blog_posts(blog["id"], text.unquote(self.label))
 
 
 class BloggerAPI():
@@ -154,25 +204,33 @@ class BloggerAPI():
         self.api_key = extractor.config("api-key", self.API_KEY)
 
     def blog_by_url(self, url):
-        return self._call("blogs/byurl", {"url": url})
+        return self._call("blogs/byurl", {"url": url}, "blog")
 
-    def blog_posts(self, blog_id):
-        return self._pagination("blogs/{}/posts".format(blog_id), {})
+    def blog_posts(self, blog_id, label=None):
+        endpoint = "blogs/{}/posts".format(blog_id)
+        params = {"labels": label}
+        return self._pagination(endpoint, params)
+
+    def blog_search(self, blog_id, query):
+        endpoint = "blogs/{}/posts/search".format(blog_id)
+        params = {"q": query}
+        return self._pagination(endpoint, params)
 
     def post_by_path(self, blog_id, path):
         endpoint = "blogs/{}/posts/bypath".format(blog_id)
-        return self._call(endpoint, {"path": path})
+        return self._call(endpoint, {"path": path}, "post")
 
-    def _call(self, endpoint, params):
+    def _call(self, endpoint, params, notfound=None):
         url = "https://www.googleapis.com/blogger/v3/" + endpoint
         params["key"] = self.api_key
-        return self.extractor.request(url, params=params).json()
+        return self.extractor.request(
+            url, params=params, notfound=notfound).json()
 
     def _pagination(self, endpoint, params):
         while True:
             data = self._call(endpoint, params)
-            yield from data["items"]
-
+            if "items" in data:
+                yield from data["items"]
             if "nextPageToken" not in data:
                 return
             params["pageToken"] = data["nextPageToken"]

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Copyright 2019 Mike Fährmann
+# Copyright 2019-2020 Mike Fährmann
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
@@ -83,11 +83,11 @@ class SexcomExtractor(Extractor):
                 data["url"] = "ytdl:" + text.extract(
                     extr('<iframe', '>'), ' src="', '"')[0]
         else:
-            data["url"] = extr(' src="', '"')
+            data["url"] = text.unescape(extr(' src="', '"').partition("?")[0])
             text.nameext_from_url(data["url"], data)
 
         data["uploader"] = extr('itemprop="author">', '<')
-        data["date"] = extr('datetime="', '"')
+        data["date"] = text.parse_datetime(extr('datetime="', '"'))
         data["tags"] = text.split_html(extr('class="tags"> Tags', '</div>'))
         data["comments"] = text.parse_int(extr('Comments (', ')'))
 
@@ -101,29 +101,29 @@ class SexcomPinExtractor(SexcomExtractor):
     pattern = r"(?:https?://)?(?:www\.)?sex\.com/pin/(\d+)(?!.*#related$)"
     test = (
         # picture
-        ("https://www.sex.com/pin/56714360/", {
-            "url": "599190d6e3d79f9f49dda194a0a58cb0ffa3ab86",
-            "content": "963ed681cf53904173c7581b713c7f9471f04db0",
+        ("https://www.sex.com/pin/21241874-sexy-ecchi-girls-166/", {
+            "pattern": "https://cdn.sex.com/images/.+/2014/08/26/7637609.jpg",
+            "content": "ebe1814dadfebf15d11c6af4f6afb1a50d6c2a1c",
             "keyword": {
-                "comments": int,
-                "date": "2018-10-02T21:18:17-04:00",
+                "comments" : int,
+                "date"     : "dt:2014-10-19 15:45:44",
                 "extension": "jpg",
-                "filename": "20037816",
-                "likes": int,
-                "pin_id": 56714360,
-                "repins": int,
-                "tags": list,
+                "filename" : "7637609",
+                "likes"    : int,
+                "pin_id"   : 21241874,
+                "repins"   : int,
+                "tags"     : list,
                 "thumbnail": str,
-                "title": "Pin #56714360",
-                "type": "picture",
-                "uploader": "alguem",
-                "url": str,
+                "title"    : "Sexy Ecchi Girls 166",
+                "type"     : "picture",
+                "uploader" : "mangazeta",
+                "url"      : str,
             },
         }),
         # gif
-        ("https://www.sex.com/pin/11465040-big-titted-hentai-gif/", {
-            "url": "98a82c5ae7a65c8228e1405ac740f80d4d556de1",
-            "content": "a54b37eb39d565094c54ad7d21244fe8f978fb14",
+        ("https://www.sex.com/pin/55435122-ecchi/", {
+            "pattern": "https://cdn.sex.com/images/.+/2017/12/07/18760842.gif",
+            "content": "176cc63fa05182cb0438c648230c0f324a5965fe",
         }),
         # video
         ("https://www.sex.com/pin/55748341/", {
@@ -133,10 +133,6 @@ class SexcomPinExtractor(SexcomExtractor):
         # pornhub embed
         ("https://www.sex.com/pin/55847384-very-nicely-animated/", {
             "pattern": "ytdl:https://www.pornhub.com/embed/ph56ef24b6750f2",
-        }),
-        # 404
-        ("https://www.sex.com/pin/55847385/", {
-            "count": 0,
         }),
     )
 
@@ -153,8 +149,8 @@ class SexcomRelatedPinExtractor(SexcomPinExtractor):
     subcategory = "related-pin"
     directory_fmt = ("{category}", "related {original_pin[pin_id]}")
     pattern = r"(?:https?://)?(?:www\.)?sex\.com/pin/(\d+).*#related$"
-    test = ("https://www.sex.com/pin/56714360/#related", {
-        "count": ">= 22",
+    test = ("https://www.sex.com/pin/21241874/#related", {
+        "count": ">= 20",
     })
 
     def metadata(self):

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Copyright 2019 Mike Fährmann
+# Copyright 2019-2020 Mike Fährmann
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
@@ -21,8 +21,8 @@ class PururinGalleryExtractor(GalleryExtractor):
         ("https://pururin.io/gallery/38661/iowant-2", {
             "pattern": r"https://cdn.pururin.io/\w+/images/data/\d+/\d+\.jpg",
             "keyword": {
-                "title"     : "Iowant 2!!",
-                "title_en"  : "Iowant 2!!",
+                "title"     : "re:I ?owant 2!!",
+                "title_en"  : "re:I ?owant 2!!",
                 "title_jp"  : "",
                 "gallery_id": 38661,
                 "count"     : 19,
@@ -36,7 +36,7 @@ class PururinGalleryExtractor(GalleryExtractor):
                 "convention": "C92",
                 "rating"    : float,
                 "uploader"  : "demo",
-                "scanlator" : "",
+                "scanlator" : "mrwayne",
                 "lang"      : "en",
                 "language"  : "English",
             }

@@ -28,9 +28,17 @@ class ImgbbExtractor(Extractor):
 
     def items(self):
         self.login()
-        response = self.request(self.page_url, params={"sort": self.sort})
-        if response.history and response.url.startswith(self.root):
-            raise exception.NotFoundError(self.subcategory)
+
+        url = self.page_url
+        params = {"sort": self.sort}
+        while True:
+            response = self.request(url, params=params, allow_redirects=False)
+            if response.status_code < 300:
+                break
+            url = response.headers["location"]
+            if url.startswith(self.root):
+                raise exception.NotFoundError(self.subcategory)
+
         page = response.text
         data = self.metadata(page)
         first = True
@@ -111,27 +119,23 @@ class ImgbbAlbumExtractor(ImgbbExtractor):
     test = (
         ("https://ibb.co/album/i5PggF", {
             "range": "1-80",
-            "url": "570872b6eb3e11cf10b618922b780fed204c3f09",
-            "keyword": "0f2fc956728c36540c577578bd168d2459d6ae4b",
+            "url": "70afec9fcc3a6de62a6b644b487d892d8d47cf1a",
+            "keyword": "569e1d88ebdd27655387559cdf1cd526a3e1ab69",
         }),
         ("https://ibb.co/album/i5PggF?sort=title_asc", {
             "range": "1-80",
-            "url": "e2e387b8fdb3690bd75d804d0af2833112e385cd",
-            "keyword": "a307fc9d2085bdc0eb7c538c8d866c59198d460c",
+            "url": "afdf5fc95d8e09d77e8f44312f3e9b843987bb5a",
+            "keyword": "f090e14d0e5f7868595082b2c95da1309c84872d",
         }),
         # no user data (#471)
         ("https://ibb.co/album/kYKpwF", {
             "url": "ac0abcfcb89f4df6adc2f7e4ff872f3b03ef1bc7",
             "keyword": {"user": ""},
         }),
-        # deleted
-        ("https://ibb.co/album/fDArrF", {
-            "exception": exception.NotFoundError,
-        }),
         # private
         ("https://ibb.co/album/hqgWrF", {
             "exception": exception.HttpError,
-        })
+        }),
     )
 
     def __init__(self, match):
@@ -151,12 +155,15 @@ class ImgbbAlbumExtractor(ImgbbExtractor):
         }
 
     def images(self, page):
+        url = text.extract(page, '"og:url" content="', '"')[0]
+        album_id = url.rpartition("/")[2].partition("?")[0]
+
         return self._pagination(page, "https://ibb.co/json", {
             "from"      : "album",
-            "albumid"   : self.album_id,
+            "albumid"   : album_id,
             "params_hidden[list]"   : "images",
             "params_hidden[from]"   : "album",
-            "params_hidden[albumid]": self.album_id,
+            "params_hidden[albumid]": album_id,
         })
 
 
@@ -192,12 +199,12 @@ class ImgbbImageExtractor(ImgbbExtractor):
     subcategory = "image"
     pattern = r"(?:https?://)?ibb\.co/(?!album/)([^/?&#]+)"
     test = ("https://ibb.co/fUqh5b", {
-        "pattern": "https://image.ibb.co/dY5FQb/Arundel-Ireeman-5.jpg",
+        "pattern": r"https://i\.ibb\.co/g3kvx80/Arundel-Ireeman-5\.jpg",
         "content": "c5a0965178a8b357acd8aa39660092918c63795e",
         "keyword": {
             "id"    : "fUqh5b",
             "title" : "Arundel Ireeman 5",
-            "url"   : "https://image.ibb.co/dY5FQb/Arundel-Ireeman-5.jpg",
+            "url"   : "https://i.ibb.co/g3kvx80/Arundel-Ireeman-5.jpg",
             "width" : 960,
             "height": 719,
             "user"  : "folkie",

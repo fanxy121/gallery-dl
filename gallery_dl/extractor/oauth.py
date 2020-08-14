@@ -1,18 +1,17 @@
 # -*- coding: utf-8 -*-
 
-# Copyright 2017-2019 Mike Fährmann
+# Copyright 2017-2020 Mike Fährmann
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
 # published by the Free Software Foundation.
 
-"""Utility classes to setup OAuth and link a users account to gallery-dl"""
+"""Utility classes to setup OAuth and link accounts to gallery-dl"""
 
 from .common import Extractor, Message
 from . import deviantart, flickr, reddit, smugmug, tumblr
-from .. import text, oauth, config, exception
+from .. import text, oauth, util, config, exception
 from ..cache import cache
-import os
 import urllib.parse
 
 REDIRECT_URI_LOCALHOST = "http://localhost:6414/"
@@ -27,6 +26,7 @@ class OAuthBase(Extractor):
     def __init__(self, match):
         Extractor.__init__(self, match)
         self.client = None
+        self.cache = config.get(("extractor", self.category), "cache", True)
 
     def oauth_config(self, key, default=None):
         return config.interpolate(
@@ -38,11 +38,11 @@ class OAuthBase(Extractor):
         print("Waiting for response. (Cancel with Ctrl+c)")
         server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        server.bind(("localhost", 6414))
+        server.bind(("localhost", self.config("port", 6414)))
         server.listen(1)
 
         # workaround for ctrl+c not working during server.accept on Windows
-        if os.name == "nt":
+        if util.WINDOWS:
             server.settimeout(1.0)
         while True:
             try:
@@ -87,18 +87,26 @@ class OAuthBase(Extractor):
 
         # exchange the request token for an access token
         data = self.session.get(access_token_url, params=data).text
-
         data = text.parse_query(data)
-        self.send(OAUTH1_MSG_TEMPLATE.format(
-            category=self.subcategory,
-            token=data["oauth_token"],
-            token_secret=data["oauth_token_secret"],
+        token = data["oauth_token"]
+        token_secret = data["oauth_token_secret"]
+
+        # write to cache
+        if self.cache:
+            key = (self.subcategory, self.session.auth.consumer_key)
+            oauth._token_cache.update(key, (token, token_secret))
+            self.log.info("Writing tokens to cache")
+
+        # display tokens
+        self.send(self._generate_message(
+            ("access-token", "access-token-secret"),
+            (token, token_secret),
         ))
 
     def _oauth2_authorization_code_grant(
             self, client_id, client_secret, auth_url, token_url,
             scope="read", key="refresh_token", auth=True,
-            message_template=None):
+            message_template=None, cache=None):
         """Perform an OAuth2 authorization code grant"""
 
         state = "gallery-dl_{}_{}".format(
@@ -149,18 +157,65 @@ class OAuthBase(Extractor):
             self.send(data["error"])
             return
 
+        # write to cache
+        if self.cache and cache:
+            cache.update("#" + str(client_id), data[key])
+            self.log.info("Writing 'refresh-token' to cache")
+
         # display token
-        part = key.partition("_")[0]
-        template = message_template or OAUTH2_MSG_TEMPLATE
-        self.send(template.format(
-            category=self.subcategory,
-            key=part,
-            Key=part.capitalize(),
-            token=data[key],
-            instance=getattr(self, "instance", ""),
-            client_id=client_id,
-            client_secret=client_secret,
-        ))
+        if message_template:
+            msg = message_template.format(
+                category=self.subcategory,
+                key=key.partition("_")[0],
+                token=data[key],
+                instance=getattr(self, "instance", ""),
+                client_id=client_id,
+                client_secret=client_secret,
+            )
+        else:
+            msg = self._generate_message(
+                ("refresh-token",),
+                (data[key],),
+            )
+        self.send(msg)
+
+    def _generate_message(self, names, values):
+        if len(names) == 1:
+            _vh = "This value has"
+            _is = "is"
+            _it = "it"
+            _va = "this value"
+        else:
+            _vh = "These values have"
+            _is = "are"
+            _it = "them"
+            _va = "these values"
+
+        msg = "\nYour {} {}\n\n{}\n\n".format(
+            " and ".join("'" + n + "'" for n in names),
+            _is,
+            "\n".join(values),
+        )
+
+        if self.cache:
+            opt = self.oauth_config(names[0])
+            if opt is None or opt == "cache":
+                msg += _vh + " been cached and will automatically be used."
+            else:
+                msg += (
+                    "Set 'extractor.{}.{}' to \"cache\" to use {}.".format(
+                        self.subcategory, names[0], _it,
+                    )
+                )
+        else:
+            msg += "Put " + _va + " into your configuration file as \n"
+            msg += " and\n".join(
+                "'extractor." + self.subcategory + "." + n + "'"
+                for n in names
+            )
+            msg += "."
+
+        return msg
 
 
 class OAuthDeviantart(OAuthBase):
@@ -173,12 +228,13 @@ class OAuthDeviantart(OAuthBase):
 
         self._oauth2_authorization_code_grant(
             self.oauth_config(
-                "client-id", deviantart.DeviantartAPI.CLIENT_ID),
+                "client-id", deviantart.DeviantartOAuthAPI.CLIENT_ID),
             self.oauth_config(
-                "client-secret", deviantart.DeviantartAPI.CLIENT_SECRET),
+                "client-secret", deviantart.DeviantartOAuthAPI.CLIENT_SECRET),
             "https://www.deviantart.com/oauth2/authorize",
             "https://www.deviantart.com/oauth2/token",
             scope="browse",
+            cache=deviantart._refresh_token_cache,
         )
 
 
@@ -218,6 +274,7 @@ class OAuthReddit(OAuthBase):
             "https://www.reddit.com/api/v1/authorize",
             "https://www.reddit.com/api/v1/access_token",
             scope="read history",
+            cache=reddit._refresh_token_cache,
         )
 
 
@@ -312,49 +369,8 @@ class OAuthMastodon(OAuthBase):
         return data
 
 
-OAUTH1_MSG_TEMPLATE = """
-Your Access Token and Access Token Secret are
-
-{token}
-{token_secret}
-
-Put these values into your configuration file as
-'extractor.{category}.access-token' and
-'extractor.{category}.access-token-secret'.
-
-Example:
-{{
-    "extractor": {{
-        "{category}": {{
-            "access-token": "{token}",
-            "access-token-secret": "{token_secret}"
-        }}
-    }}
-}}
-"""
-
-
-OAUTH2_MSG_TEMPLATE = """
-Your {Key} Token is
-
-{token}
-
-Put this value into your configuration file as
-'extractor.{category}.{key}-token'.
-
-Example:
-{{
-    "extractor": {{
-        "{category}": {{
-            "{key}-token": "{token}"
-        }}
-    }}
-}}
-"""
-
-
 MASTODON_MSG_TEMPLATE = """
-Your {Key} Token is
+Your 'access-token' is
 
 {token}
 

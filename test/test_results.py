@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-# Copyright 2015-2019 Mike Fährmann
+# Copyright 2015-2020 Mike Fährmann
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
@@ -9,11 +9,15 @@
 
 import os
 import sys
+import unittest
+
 import re
 import json
 import hashlib
-import unittest
-from gallery_dl import extractor, util, job, config, exception
+import datetime
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from gallery_dl import extractor, util, job, config, exception  # noqa E402
 
 
 # these don't work on Travis CI
@@ -21,15 +25,15 @@ TRAVIS_SKIP = {
     "exhentai", "kissmanga", "mangafox", "dynastyscans", "nijie", "bobx",
     "archivedmoe", "archiveofsins", "thebarchive", "fireden", "4plebs",
     "sankaku", "idolcomplex", "mangahere", "readcomiconline", "mangadex",
-    "sankakucomplex", "warosu", "fuskator", "patreon",
+    "sankakucomplex", "warosu", "fuskator", "patreon", "komikcast",
+    "instagram",
 }
 
 # temporary issues, etc.
 BROKEN = {
-    "mangapark",
+    "imagevenue",
     "photobucket",
-    "pixhost",
-    "simplyhentai",
+    "worldthree",
 }
 
 
@@ -110,7 +114,12 @@ class TestExtractorResults(unittest.TestCase):
             self.assertEqual(result["url"], tjob.url_hash.hexdigest())
 
         if "content" in result:
-            self.assertEqual(result["content"], tjob.content_hash.hexdigest())
+            expected = result["content"]
+            digest = tjob.content_hash.hexdigest()
+            if isinstance(expected, str):
+                self.assertEqual(digest, expected, "content")
+            else:  # assume iterable
+                self.assertIn(digest, expected, "content")
 
         if "keyword" in result:
             expected = result["keyword"]
@@ -150,6 +159,9 @@ class TestExtractorResults(unittest.TestCase):
             elif isinstance(test, str):
                 if test.startswith("re:"):
                     self.assertRegex(value, test[3:], msg=key)
+                elif test.startswith("dt:"):
+                    self.assertIsInstance(value, datetime.datetime, msg=key)
+                    self.assertEqual(str(value), test[3:], msg=key)
                 elif test.startswith("type:"):
                     self.assertEqual(type(value).__name__, test[5:], msg=key)
                 else:
@@ -263,7 +275,7 @@ class TestFormatter(util.Formatter):
         return ""
 
     def _apply_simple(self, key, fmt):
-        if key == "extension" or "._format_optional." in repr(fmt):
+        if key == "extension" or "._parse_optional." in repr(fmt):
             return self._noop
 
         def wrap(obj):
@@ -271,7 +283,7 @@ class TestFormatter(util.Formatter):
         return wrap
 
     def _apply(self, key, funcs, fmt):
-        if key == "extension" or "._format_optional." in repr(fmt):
+        if key == "extension" or "._parse_optional." in repr(fmt):
             return self._noop
 
         def wrap(obj):
@@ -296,15 +308,19 @@ def setup_test_config():
 
     config.set(("extractor", "nijie")     , "username", email)
     config.set(("extractor", "seiga")     , "username", email)
-    config.set(("extractor", "danbooru")  , "username", None)
-    config.set(("extractor", "instagram") , "username", None)
-    config.set(("extractor", "twitter")   , "username", None)
 
     config.set(("extractor", "newgrounds"), "username", "d1618111")
     config.set(("extractor", "newgrounds"), "password", "d1618111")
 
     config.set(("extractor", "mangoxo")   , "username", "LiQiang3")
     config.set(("extractor", "mangoxo")   , "password", "5zbQF10_5u25259Ma")
+
+    for category in ("danbooru", "instagram", "twitter", "subscribestar",
+                     "e621", "inkbunny"):
+        config.set(("extractor", category), "username", None)
+
+    config.set(("extractor", "mastodon.social"), "access-token",
+               "Blf9gVqG7GytDTfVMiyYQjwVMQaNACgf3Ds3IxxVDUQ")
 
     config.set(("extractor", "deviantart"), "client-id", "7777")
     config.set(("extractor", "deviantart"), "client-secret",

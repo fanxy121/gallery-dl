@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Copyright 2018-2019 Mike Fährmann
+# Copyright 2018-2020 Mike Fährmann
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
@@ -11,6 +11,7 @@
 from .common import Extractor, Message
 from .. import text, exception
 from ..cache import cache
+import itertools
 import json
 
 
@@ -35,16 +36,17 @@ class NewgroundsExtractor(Extractor):
 
         for post_url in self.posts():
             try:
-                file = self.extract_post(post_url)
-                url = file["url"]
-            #  except Exception:
-            except OSError:
+                post = self.extract_post(post_url)
+                url = post.get("url")
+            except Exception:
                 url = None
-            if not url:
-                self.log.warning("Unable to get download URL for %s", post_url)
-                continue
-            yield Message.Directory, file
-            yield Message.Url, url, text.nameext_from_url(url, file)
+
+            if url:
+                yield Message.Directory, post
+                yield Message.Url, url, text.nameext_from_url(url, post)
+            else:
+                self.log.warning(
+                    "Unable to get download URL for '%s'", post_url)
 
     def posts(self):
         """Return urls of all relevant image pages"""
@@ -82,7 +84,10 @@ class NewgroundsExtractor(Extractor):
         }
 
     def extract_post(self, post_url):
-        page = self.request(post_url).text
+        response = self.request(post_url, fatal=False)
+        if response.status_code >= 400:
+            return {}
+        page = response.text
         extr = text.extract_from(page)
 
         if "/art/view/" in post_url:
@@ -97,8 +102,7 @@ class NewgroundsExtractor(Extractor):
         data["favorites"] = text.parse_int(extr(
             'id="faves_load">', '<').replace(",", ""))
         data["score"] = text.parse_float(extr('id="score_number">', '<'))
-        data["tags"] = text.split_html(extr(
-            '<dd class="tags momag">', '</dd>'))
+        data["tags"] = text.split_html(extr('<dd class="tags">', '</dd>'))
         data["artist"] = [
             text.extract(user, '//', '.')[0]
             for user in text.extract_iter(page, '<div class="item-user">', '>')
@@ -194,7 +198,7 @@ class NewgroundsImageExtractor(NewgroundsExtractor):
             "keyword": {
                 "artist"     : ["tomfulp"],
                 "comment"    : "re:Consider this the bottom threshold for ",
-                "date"       : "type:datetime",
+                "date"       : "dt:2009-06-04 14:44:05",
                 "description": "re:Consider this the bottom threshold for ",
                 "favorites"  : int,
                 "filename"   : "94_tomfulp_ryu-is-hawt",
@@ -220,10 +224,7 @@ class NewgroundsImageExtractor(NewgroundsExtractor):
             self.post_url = "https://www.newgrounds.com/art/view/{}/{}".format(
                 self.user, match.group(3))
         else:
-            url = match.group(0)
-            if not url.startswith("http"):
-                url = "https://" + url
-            self.post_url = url
+            self.post_url = text.ensure_http_scheme(match.group(0))
 
     def posts(self):
         return (self.post_url,)
@@ -241,7 +242,7 @@ class NewgroundsMediaExtractor(NewgroundsExtractor):
             "keyword": {
                 "artist"     : ["psychogoldfish", "tomfulp"],
                 "comment"    : "re:People have been asking me how I like the ",
-                "date"       : "type:datetime",
+                "date"       : "dt:2012-02-08 21:40:56",
                 "description": "re:People have been asking how I like the ",
                 "favorites"  : int,
                 "filename"   : "527818_alternate_1896",
@@ -259,7 +260,7 @@ class NewgroundsMediaExtractor(NewgroundsExtractor):
             "keyword": {
                 "artist"     : ["zj", "tomfulp"],
                 "comment"    : "re:RECORDED 12-09-2014\n\nFrom The ZJ \"Late ",
-                "date"       : "type:datetime",
+                "date"       : "dt:2015-02-23 19:31:59",
                 "description": "From The ZJ Report Show!",
                 "favorites"  : int,
                 "index"      : 609768,
@@ -284,7 +285,7 @@ class NewgroundsMediaExtractor(NewgroundsExtractor):
 class NewgroundsArtExtractor(NewgroundsExtractor):
     """Extractor for all images of a newgrounds user"""
     subcategory = "art"
-    pattern = r"(?:https?://)?([^.]+)\.newgrounds\.com/art/?$"
+    pattern = r"(?:https?://)?([\w-]+)\.newgrounds\.com/art/?$"
     test = ("https://tomfulp.newgrounds.com/art", {
         "pattern": NewgroundsImageExtractor.pattern,
         "count": ">= 3",
@@ -294,7 +295,7 @@ class NewgroundsArtExtractor(NewgroundsExtractor):
 class NewgroundsAudioExtractor(NewgroundsExtractor):
     """Extractor for all audio submissions of a newgrounds user"""
     subcategory = "audio"
-    pattern = r"(?:https?://)?([^.]+)\.newgrounds\.com/audio/?$"
+    pattern = r"(?:https?://)?([\w-]+)\.newgrounds\.com/audio/?$"
     test = ("https://tomfulp.newgrounds.com/audio", {
         "pattern": r"https://audio.ngfiles.com/\d+/\d+_.+\.mp3",
         "count": ">= 4",
@@ -304,7 +305,7 @@ class NewgroundsAudioExtractor(NewgroundsExtractor):
 class NewgroundsMoviesExtractor(NewgroundsExtractor):
     """Extractor for all movies of a newgrounds user"""
     subcategory = "movies"
-    pattern = r"(?:https?://)?([^.]+)\.newgrounds\.com/movies/?$"
+    pattern = r"(?:https?://)?([\w-]+)\.newgrounds\.com/movies/?$"
     test = ("https://tomfulp.newgrounds.com/movies", {
         "pattern": r"https://uploads.ungrounded.net(/alternate)?/\d+/\d+_.+",
         "range": "1-10",
@@ -315,7 +316,7 @@ class NewgroundsMoviesExtractor(NewgroundsExtractor):
 class NewgroundsUserExtractor(NewgroundsExtractor):
     """Extractor for a newgrounds user profile"""
     subcategory = "user"
-    pattern = r"(?:https?://)?([^.]+)\.newgrounds\.com/?$"
+    pattern = r"(?:https?://)?([\w-]+)\.newgrounds\.com/?$"
     test = (
         ("https://tomfulp.newgrounds.com", {
             "pattern": "https://tomfulp.newgrounds.com/art$",
@@ -334,3 +335,82 @@ class NewgroundsUserExtractor(NewgroundsExtractor):
             (NewgroundsAudioExtractor , base + "audio"),
             (NewgroundsMoviesExtractor, base + "movies"),
         ), ("art",))
+
+
+class NewgroundsFavoriteExtractor(NewgroundsExtractor):
+    """Extractor for posts favorited by a newgrounds user"""
+    subcategory = "favorite"
+    directory_fmt = ("{category}", "{user}", "Favorites")
+    pattern = (r"(?:https?://)?([^.]+)\.newgrounds\.com"
+               r"/favorites(?!/following)(?:/(art|audio|movies))?/?")
+    test = (
+        ("https://tomfulp.newgrounds.com/favorites/art", {
+            "range": "1-10",
+            "count": ">= 10",
+        }),
+        ("https://tomfulp.newgrounds.com/favorites/audio"),
+        ("https://tomfulp.newgrounds.com/favorites/movies"),
+        ("https://tomfulp.newgrounds.com/favorites/"),
+    )
+
+    def __init__(self, match):
+        NewgroundsExtractor.__init__(self, match)
+        self.kind = match.group(2)
+
+    def posts(self):
+        if self.kind:
+            return self._pagination(self.kind)
+        return itertools.chain.from_iterable(
+            self._pagination(k) for k in ("art", "audio", "movies")
+        )
+
+    def _pagination(self, kind):
+        num = 1
+        headers = {
+            "Accept": "application/json, text/javascript, */*; q=0.01",
+            "X-Requested-With": "XMLHttpRequest",
+            "Referer": self.user_root,
+        }
+
+        while True:
+            url = "{}/favorites/{}/{}".format(self.user_root, kind, num)
+            response = self.request(url, headers=headers)
+            if response.history:
+                return
+
+            favs = self._extract_favorites(response.text)
+            yield from favs
+
+            if len(favs) < 24:
+                return
+            num += 1
+
+    def _extract_favorites(self, page):
+        return [
+            self.root + path
+            for path in text.extract_iter(
+                page, 'href="https://www.newgrounds.com', '"')
+        ]
+
+
+class NewgroundsFollowingExtractor(NewgroundsFavoriteExtractor):
+    """Extractor for a newgrounds user's favorited users"""
+    subcategory = "following"
+    pattern = r"(?:https?://)?([^.]+)\.newgrounds\.com/favorites/(following)"
+    test = ("https://tomfulp.newgrounds.com/favorites/following", {
+        "pattern": NewgroundsUserExtractor.pattern,
+        "range": "76-125",
+        "count": 50,
+    })
+
+    def items(self):
+        data = {"_extractor": NewgroundsUserExtractor}
+        for url in self._pagination(self.kind):
+            yield Message.Queue, url, data
+
+    @staticmethod
+    def _extract_favorites(page):
+        return [
+            text.ensure_http_scheme(user.rpartition('"')[2])
+            for user in text.extract_iter(page, 'class="item-user', '"><img')
+        ]

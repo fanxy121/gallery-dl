@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Copyright 2016-2019 Mike Fährmann
+# Copyright 2016-2020 Mike Fährmann
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
@@ -19,6 +19,7 @@ from .common import (
 from .. import text, util
 import base64
 import json
+import re
 
 
 class FoolslideBase(SharedConfigMixin):
@@ -82,13 +83,23 @@ class FoolslideChapterExtractor(FoolslideBase, ChapterExtractor):
         })
 
     def images(self, page):
+        data = None
+
         if self.decode == "base64":
-            base64_data = text.extract(page, 'atob("', '"')[0].encode()
-            data = base64.b64decode(base64_data).decode()
+            pos = page.find("'fromCharCode'")
+            if pos >= 0:
+                blob = text.extract(page, "'", "'", pos+15)[0]
+                base64_data = re.sub(r"[a-zA-Z]", _decode_jaiminisbox, blob)
+            else:
+                base64_data = text.extract(page, 'atob("', '"')[0]
+            if base64_data:
+                data = base64.b64decode(base64_data.encode()).decode()
         elif self.decode == "double":
             pos = page.find("[{")
-            data = text.extract(page, " = ", ";", pos)[0]
-        else:
+            if pos >= 0:
+                data = text.extract(page, " = ", ";", pos)[0]
+
+        if not data:
             data = text.extract(page, "var pages = ", ";")[0]
         return json.loads(data)
 
@@ -115,6 +126,16 @@ class FoolslideMangaExtractor(FoolslideBase, MangaExtractor):
             })))
 
 
+def _decode_jaiminisbox(match):
+    c = match.group(0)
+
+    # ord("Z") == 90, ord("z") == 122
+    N = 90 if c <= "Z" else 122
+    C = ord(c) + 13
+
+    return chr(C if N >= C else (C - 26))
+
+
 EXTRACTORS = {
     "dokireader": {
         "root": "https://kobato.hologfx.com/reader",
@@ -134,18 +155,13 @@ EXTRACTORS = {
         "root": "https://jaiminisbox.com/reader",
         "pattern": r"(?:www\.)?jaiminisbox\.com/reader",
         "extra": {"decode": "base64"},
-        "test-chapter": (
-            ("https://jaiminisbox.com/reader/read/uratarou/en/0/1/", {
-                "keyword": "6009af77cc9c05528ab1fdda47b1ad9d4811c673",
+        "test-chapter":
+            ("https://jaiminisbox.com/reader/read/oshi-no-ko/en/0/1/", {
+                "keyword": "d6435cfc1522293a42517a4aadda95a8631da0b3",
             }),
-            ("https://jaiminisbox.com/reader/read/dr-stone/en/0/16/", {
-                "keyword": "8607375c24b1d0db7f52d059ef5baff793aa458e",
-            }),
-        ),
         "test-manga":
-            ("https://jaiminisbox.com/reader/series/sora_no_kian/", {
-                "url": "66612be177dc3b3fa1d1f537ef02f4f701b163ea",
-                "keyword": "0908a4145bb03acc4210f5d01169988969f5acd1",
+            ("https://jaiminisbox.com/reader/series/oshi-no-ko/", {
+                "count": ">= 10",
             }),
     },
     "kireicake": {
@@ -188,25 +204,25 @@ EXTRACTORS = {
             }),
     },
     "sensescans": {
-        "root": "http://sensescans.com/reader",
+        "root": "https://sensescans.com/reader",
         "pattern": r"(?:(?:www\.)?sensescans\.com/reader"
                    r"|reader\.sensescans\.com)",
         "test-chapter": (
-            (("http://sensescans.com/reader/read/"
+            (("https://sensescans.com/reader/read/"
               "magi__labyrinth_of_magic/en/37/369/"), {
-                  "url": "a399ef037cdfbc25b09d435cc2ea1e3e454a6812",
+                  "url": "8bbc59a995640bbb944c0b1be06a490909b58be1",
                   "keyword": "07acd84fb18a9f1fd6dff5befe711bcca0ff9988",
             }),
-            (("http://reader.sensescans.com/read/"
+            (("https://reader.sensescans.com/read/"
               "magi__labyrinth_of_magic/en/37/369/"), {
-                  "url": "a399ef037cdfbc25b09d435cc2ea1e3e454a6812",
+                  "url": "8bbc59a995640bbb944c0b1be06a490909b58be1",
                   "keyword": "07acd84fb18a9f1fd6dff5befe711bcca0ff9988",
             }),
         ),
         "test-manga":
-            ("http://sensescans.com/reader/series/hakkenden/", {
-                "url": "2360ccb0ead0ff2f5e27b7aef7eb17b9329de2f2",
-                "keyword": "4919f2bfed38e3a34dc984ec8d1dbd7a03044e23",
+            ("https://sensescans.com/reader/series/yotsubato/", {
+                "url": "ee4dca7c421bf15ac039200f8c0bcb0858153640",
+                "keyword": "f94961bd731bd878bbd4d48555bc3ace1d937364",
             }),
     },
     "worldthree": {

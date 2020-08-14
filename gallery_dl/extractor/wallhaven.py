@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 
-# Copyright 2018-2019 Mike Fährmann
+# Copyright 2018-2020 Mike Fährmann
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
 # published by the Free Software Foundation.
 
-"""Extract images from https://wallhaven.cc/"""
+"""Extractors for https://wallhaven.cc/"""
 
 from .common import Extractor, Message
 from .. import text
@@ -34,7 +34,7 @@ class WallhavenSearchExtractor(WallhavenExtractor):
         (("https://wallhaven.cc/search?q=id%3A87"
           "&categories=111&purity=100&sorting=date_added&order=asc&page=3"), {
             "pattern": r"https://w.wallhaven.cc/full/\w\w/wallhaven-\w+\.\w+",
-            "count": "<= 10",
+            "count": "<= 20",
         }),
     )
 
@@ -77,7 +77,7 @@ class WallhavenImageExtractor(WallhavenExtractor):
                     "group"    : "Owner/Developer",
                     "username" : "AksumkA",
                 },
-                "date"       : "type:datetime",
+                "date"       : "dt:2014-08-31 06:17:19",
                 "wh_category": "anime",
                 "views"      : int,
                 "favorites"  : int,

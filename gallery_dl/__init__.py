@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Copyright 2014-2019 Mike Fährmann
+# Copyright 2014-2020 Mike Fährmann
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
@@ -108,7 +108,7 @@ def parse_inputfile(file, log):
 
 def main():
     try:
-        if sys.stdout.encoding.lower() != "utf-8":
+        if sys.stdout and sys.stdout.encoding.lower() != "utf-8":
             output.replace_std_streams()
 
         parser = option.build_parser()
@@ -129,17 +129,8 @@ def main():
         for opts in args.options:
             config.set(*opts)
 
-        # stream logging handler
-        output.configure_logging_handler(
-            "log", logging.getLogger().handlers[0])
-
-        # file logging handler
-        handler = output.setup_logging_handler(
-            "logfile", lvl=args.loglevel)
-        if handler:
-            logging.getLogger().addHandler(handler)
-
         # loglevels
+        output.configure_logging(args.loglevel)
         if args.loglevel >= logging.ERROR:
             config.set(("output",), "mode", "null")
         elif args.loglevel <= logging.DEBUG:
@@ -214,11 +205,13 @@ def main():
             if args.inputfile:
                 try:
                     if args.inputfile == "-":
-                        file = sys.stdin
+                        if sys.stdin:
+                            urls += parse_inputfile(sys.stdin, log)
+                        else:
+                            log.warning("input file: stdin is not readable")
                     else:
-                        file = open(args.inputfile, encoding="utf-8")
-                    urls += parse_inputfile(file, log)
-                    file.close()
+                        with open(args.inputfile, encoding="utf-8") as file:
+                            urls += parse_inputfile(file, log)
                 except OSError as exc:
                     log.warning("input file: %s", exc)
 

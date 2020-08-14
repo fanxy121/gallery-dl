@@ -1,19 +1,20 @@
 # -*- coding: utf-8 -*-
 
-# Copyright 2016-2019 Mike Fährmann
+# Copyright 2016-2020 Mike Fährmann
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
 # published by the Free Software Foundation.
 
-"""Extract images from https://www.pinterest.com/"""
+"""Extractors for https://www.pinterest.com/"""
 
 from .common import Extractor, Message
 from .. import text, exception
+import itertools
 import json
 
 
-BASE_PATTERN = r"(?:https?://)?(?:\w+\.)?pinterest\.\w+"
+BASE_PATTERN = r"(?:https?://)?(?:\w+\.)?pinterest\.[\w.]+"
 
 
 class PinterestExtractor(Extractor):
@@ -60,9 +61,8 @@ class PinterestPinExtractor(PinterestExtractor):
     test = (
         ("https://www.pinterest.com/pin/858146903966145189/", {
             "url": "afb3c26719e3a530bb0e871c480882a801a4e8a5",
-            # image version depends on CDN server used
-            #  "content": "d3e24bc9f7af585e8c23b9136956bd45a4d9b947",
-            #  "content": "4c435a66f6bb82bb681db2ecc888f76cf6c5f9ca",
+            "content": ("4c435a66f6bb82bb681db2ecc888f76cf6c5f9ca",
+                        "d3e24bc9f7af585e8c23b9136956bd45a4d9b947"),
         }),
         ("https://www.pinterest.com/pin/858146903966145188/", {
             "exception": exception.NotFoundError,
@@ -87,30 +87,72 @@ class PinterestBoardExtractor(PinterestExtractor):
     subcategory = "board"
     directory_fmt = ("{category}", "{board[owner][username]}", "{board[name]}")
     archive_fmt = "{board[id]}_{id}"
-    pattern = BASE_PATTERN + r"/(?!pin/)([^/?#&]+)/([^/?#&]+)(?!.*#related$)"
+    pattern = BASE_PATTERN + r"/(?!pin/)([^/?#&]+)/([^/?#&]+)/?$"
     test = (
         ("https://www.pinterest.com/g1952849/test-/", {
             "pattern": r"https://i\.pinimg\.com/originals/",
             "count": 2,
         }),
+        # board with sections (#835)
+        ("https://www.pinterest.com/g1952849/stuff/", {
+            "options": (("sections", True),),
+            "count": 5,
+        }),
         ("https://www.pinterest.com/g1952848/test/", {
             "exception": exception.GalleryDLException,
         }),
+        # .co.uk TLD (#914)
+        ("https://www.pinterest.co.uk/hextra7519/based-animals/"),
     )
 
     def __init__(self, match):
         PinterestExtractor.__init__(self, match)
         self.user = text.unquote(match.group(1))
-        self.board = text.unquote(match.group(2))
-        self.board_id = 0
+        self.board_name = text.unquote(match.group(2))
+        self.board = None
 
     def metadata(self):
-        board = self.api.board(self.user, self.board)
-        self.board_id = board["id"]
-        return {"board": board}
+        self.board = self.api.board(self.user, self.board_name)
+        return {"board": self.board}
 
     def pins(self):
-        return self.api.board_pins(self.board_id)
+        board = self.board
+
+        if board["section_count"] and self.config("sections", True):
+            pins = [self.api.board_pins(board["id"])]
+            for section in self.api.board_sections(board["id"]):
+                pins.append(self.api.board_section_pins(section["id"]))
+            return itertools.chain.from_iterable(pins)
+        else:
+            return self.api.board_pins(board["id"])
+
+
+class PinterestSectionExtractor(PinterestExtractor):
+    """Extractor for board sections on pinterest.com"""
+    subcategory = "section"
+    directory_fmt = ("{category}", "{board[owner][username]}",
+                     "{board[name]}", "{section[title]}")
+    archive_fmt = "{board[id]}_{id}"
+    pattern = BASE_PATTERN + r"/(?!pin/)([^/?#&]+)/([^/?#&]+)/([^/?#&]+)"
+    test = ("https://www.pinterest.com/g1952849/stuff/section", {
+        "count": 2,
+    })
+
+    def __init__(self, match):
+        PinterestExtractor.__init__(self, match)
+        self.user = text.unquote(match.group(1))
+        self.board_slug = text.unquote(match.group(2))
+        self.section_slug = text.unquote(match.group(3))
+        self.section = None
+
+    def metadata(self):
+        section = self.section = self.api.board_section(
+            self.user, self.board_slug, self.section_slug)
+        section.pop("preview_pins", None)
+        return {"board": section.pop("board"), "section": section}
+
+    def pins(self):
+        return self.api.board_section_pins(self.section["id"])
 
 
 class PinterestRelatedPinExtractor(PinterestPinExtractor):
@@ -137,7 +179,7 @@ class PinterestRelatedBoardExtractor(PinterestBoardExtractor):
     subcategory = "related-board"
     directory_fmt = ("{category}", "{board[owner][username]}",
                      "{board[name]}", "related")
-    pattern = BASE_PATTERN + r"/(?!pin/)([^/?#&]+)/([^/?#&]+).*#related$"
+    pattern = BASE_PATTERN + r"/(?!pin/)([^/?#&]+)/([^/?#&]+)/?#related$"
     test = ("https://www.pinterest.com/g1952849/test-/#related", {
         "range": "31-70",
         "count": 40,
@@ -145,7 +187,7 @@ class PinterestRelatedBoardExtractor(PinterestBoardExtractor):
     })
 
     def pins(self):
-        return self.api.board_related(self.board_id)
+        return self.api.board_related(self.board["id"])
 
 
 class PinterestPinitExtractor(PinterestExtractor):
@@ -171,11 +213,9 @@ class PinterestPinitExtractor(PinterestExtractor):
             self.shortened_id)
         response = self.request(url, method="HEAD", allow_redirects=False)
         location = response.headers.get("Location")
-        if not location or location in ("https://api.pinterest.com/None",
-                                        "https://pin.it/None",
-                                        "https://www.pinterest.com"):
+        if not location or not PinterestPinExtractor.pattern.match(location):
             raise exception.NotFoundError("pin")
-        yield Message.Queue, location, {}
+        yield Message.Queue, location, {"_extractor": PinterestPinExtractor}
 
 
 class PinterestAPI():
@@ -191,9 +231,10 @@ class PinterestAPI():
                                 "*/*, q=0.01",
         "Accept-Language"     : "en-US,en;q=0.5",
         "X-Pinterest-AppState": "active",
-        "X-APP-VERSION"       : "cb1c7f9",
+        "X-APP-VERSION"       : "b00dd49",
         "X-Requested-With"    : "XMLHttpRequest",
-        "Origin"              : BASE_URL + "/",
+        "Origin"              : BASE_URL,
+        "Referer"             : BASE_URL + "/",
     }
 
     def __init__(self, extractor):
@@ -209,9 +250,9 @@ class PinterestAPI():
         options = {"pin": pin_id, "add_vase": True, "pins_only": True}
         return self._pagination("RelatedPinFeed", options)
 
-    def board(self, user, board):
+    def board(self, user, board_name):
         """Query information about a board"""
-        options = {"slug": board, "username": user,
+        options = {"slug": board_name, "username": user,
                    "field_set_key": "detailed"}
         return self._call("Board", options)["resource_response"]["data"]
 
@@ -219,6 +260,22 @@ class PinterestAPI():
         """Yield all pins of a specific board"""
         options = {"board_id": board_id}
         return self._pagination("BoardFeed", options)
+
+    def board_section(self, user, board_slug, section_slug):
+        """Yield a specific board section"""
+        options = {"board_slug": board_slug, "section_slug": section_slug,
+                   "username": user}
+        return self._call("BoardSection", options)["resource_response"]["data"]
+
+    def board_sections(self, board_id):
+        """Yield all sections of a specific board"""
+        options = {"board_id": board_id}
+        return self._pagination("BoardSections", options)
+
+    def board_section_pins(self, section_id):
+        """Yield all pins from a board section"""
+        options = {"section_id": section_id}
+        return self._pagination("BoardSectionPins", options)
 
     def board_related(self, board_id):
         """Yield related pins of a specific board"""
@@ -243,7 +300,7 @@ class PinterestAPI():
         if response.status_code == 404 or response.history:
             resource = self.extractor.subcategory.rpartition("-")[2]
             raise exception.NotFoundError(resource)
-        self.extractor.log.debug("%s", response.text)
+        self.extractor.log.debug("Server response: %s", response.text)
         raise exception.StopExtraction("API request failed")
 
     def _pagination(self, resource, options):

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Copyright 2016-2019 Mike Fährmann
+# Copyright 2016-2020 Mike Fährmann
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
@@ -37,7 +37,7 @@ class CacheDecorator():
     def update(self, key, value):
         self.cache[key] = value
 
-    def invalidate(self, key):
+    def invalidate(self, key=""):
         try:
             del self.cache[key]
         except KeyError:
@@ -57,7 +57,7 @@ class MemoryCacheDecorator(CacheDecorator):
             value, expires = self.cache[key]
         except KeyError:
             expires = 0
-        if expires < timestamp:
+        if expires <= timestamp:
             value = self.func(*args, **kwargs)
             expires = timestamp + self.maxage
             self.cache[key] = value, expires
@@ -96,12 +96,12 @@ class DatabaseCacheDecorator():
 
         # database lookup
         fullkey = "%s-%s" % (self.key, key)
-        cursor = self.cursor()
-        try:
-            cursor.execute("BEGIN EXCLUSIVE")
-        except sqlite3.OperationalError:
-            pass  # Silently swallow exception - workaround for Python 3.6
-        try:
+        with self.database() as db:
+            cursor = db.cursor()
+            try:
+                cursor.execute("BEGIN EXCLUSIVE")
+            except sqlite3.OperationalError:
+                pass  # Silently swallow exception - workaround for Python 3.6
             cursor.execute(
                 "SELECT value, expires FROM data WHERE key=? LIMIT 1",
                 (fullkey,),
@@ -118,37 +118,38 @@ class DatabaseCacheDecorator():
                     "INSERT OR REPLACE INTO data VALUES (?,?,?)",
                     (fullkey, pickle.dumps(value), expires),
                 )
-        finally:
-            self.db.commit()
+
         self.cache[key] = value, expires
         return value
 
     def update(self, key, value):
         expires = int(time.time()) + self.maxage
         self.cache[key] = value, expires
-        self.cursor().execute(
-            "INSERT OR REPLACE INTO data VALUES (?,?,?)",
-            ("%s-%s" % (self.key, key), pickle.dumps(value), expires),
-        )
+        with self.database() as db:
+            db.execute(
+                "INSERT OR REPLACE INTO data VALUES (?,?,?)",
+                ("%s-%s" % (self.key, key), pickle.dumps(value), expires),
+            )
 
     def invalidate(self, key):
         try:
             del self.cache[key]
         except KeyError:
             pass
-        self.cursor().execute(
-            "DELETE FROM data WHERE key=? LIMIT 1",
-            ("%s-%s" % (self.key, key),),
-        )
+        with self.database() as db:
+            db.execute(
+                "DELETE FROM data WHERE key=?",
+                ("%s-%s" % (self.key, key),),
+            )
 
-    def cursor(self):
+    def database(self):
         if self._init:
             self.db.execute(
                 "CREATE TABLE IF NOT EXISTS data "
                 "(key TEXT PRIMARY KEY, value TEXT, expires INTEGER)"
             )
             DatabaseCacheDecorator._init = False
-        return self.db.cursor()
+        return self.db
 
 
 def memcache(maxage=None, keyarg=None):
@@ -188,25 +189,26 @@ def clear():
 
 
 def _path():
-    path = config.get(("cache",), "file", -1)
-    if path != -1:
+    path = config.get(("cache",), "file", util.SENTINEL)
+    if path is not util.SENTINEL:
         return util.expand_path(path)
 
-    if os.name == "nt":
-        import tempfile
-        return os.path.join(tempfile.gettempdir(), ".gallery-dl.cache")
+    if util.WINDOWS:
+        cachedir = os.environ.get("APPDATA", "~")
+    else:
+        cachedir = os.environ.get("XDG_CACHE_HOME", "~/.cache")
 
-    cachedir = util.expand_path(os.path.join(
-        os.environ.get("XDG_CACHE_HOME", "~/.cache"), "gallery-dl"))
+    cachedir = util.expand_path(os.path.join(cachedir, "gallery-dl"))
     os.makedirs(cachedir, exist_ok=True)
     return os.path.join(cachedir, "cache.sqlite3")
 
 
 try:
     dbfile = _path()
-    if os.name != "nt":
-        # restrict access permissions for new db files
-        os.close(os.open(dbfile, os.O_CREAT | os.O_RDONLY, 0o600))
+
+    # restrict access permissions for new db files
+    os.close(os.open(dbfile, os.O_CREAT | os.O_RDONLY, 0o600))
+
     DatabaseCacheDecorator.db = sqlite3.connect(
         dbfile, timeout=30, check_same_thread=False)
 except (OSError, TypeError, sqlite3.OperationalError):

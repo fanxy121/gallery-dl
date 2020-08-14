@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Copyright 2016-2019 Mike Fährmann
+# Copyright 2016-2020 Mike Fährmann
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
@@ -56,12 +56,12 @@ class LusciousAlbumExtractor(LusciousExtractor):
                     "__typename"  : "Album",
                     "audiences"   : list,
                     "content"     : "Hentai",
-                    "cover"       : "re:https://cdnio.luscious.net/.+/277031/",
+                    "cover"       : "re:https://\\w+.luscious.net/.+/277031/",
                     "created"     : 1479625853,
                     "created_by"  : "NTRshouldbeillegal",
-                    "date"        : "type:datetime",
+                    "date"        : "dt:2016-11-20 07:10:53",
                     "description" : "Enjoy.",
-                    "download_url": "/download/824778/277031/",
+                    "download_url": "re:/download/(r/)?824778/277031/",
                     "genres"      : list,
                     "id"          : 277031,
                     "is_manga"    : True,
@@ -72,7 +72,7 @@ class LusciousAlbumExtractor(LusciousExtractor):
                     "permissions" : list,
                     "rating"      : float,
                     "slug"        : "okinami-no-koigokoro",
-                    "status"      : "not_moderated",
+                    "status"      : str,
                     "tags"        : list,
                     "title"       : "Okinami no Koigokoro",
                     "url"         : "/albums/okinami-no-koigokoro_277031/",
@@ -92,7 +92,7 @@ class LusciousAlbumExtractor(LusciousExtractor):
                 "like_status" : "none",
                 "position"    : int,
                 "resolution"  : r"re:\d+x\d+",
-                "status"      : "not_moderated",
+                "status"      : str,
                 "tags"        : list,
                 "thumbnail"   : str,
                 "title"       : str,
@@ -102,7 +102,7 @@ class LusciousAlbumExtractor(LusciousExtractor):
             },
         }),
         ("https://luscious.net/albums/virgin-killer-sweater_282582/", {
-            "url": "21cc68a7548f4d71dfd67d8caf96349dde7e791c",
+            "url": "0be0cc279be1de99f727764819e03435e2a79915",
         }),
         ("https://luscious.net/albums/not-found_277035/", {
             "exception": exception.NotFoundError,

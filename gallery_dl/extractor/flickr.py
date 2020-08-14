@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Copyright 2017-2019 Mike Fährmann
+# Copyright 2017-2020 Mike Fährmann
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
@@ -16,6 +16,7 @@ class FlickrExtractor(Extractor):
     """Base class for flickr extractors"""
     category = "flickr"
     filename_fmt = "{category}_{id}.{extension}"
+    cookiedomain = None
 
     def __init__(self, match):
         Extractor.__init__(self, match)
@@ -60,7 +61,8 @@ class FlickrImageExtractor(FlickrExtractor):
     test = (
         ("https://www.flickr.com/photos/departingyyz/16089302239", {
             "pattern": pattern,
-            "content": "0821a28ee46386e85b02b67cf2720063440a228c",
+            "content": ("3133006c6d657fe54cf7d4c46b82abbcb0efaf9f",
+                        "0821a28ee46386e85b02b67cf2720063440a228c"),
             "keyword": {
                 "comments": int,
                 "description": str,

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Copyright 2014-2019 Mike Fährmann
+# Copyright 2014-2020 Mike Fährmann
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
@@ -16,7 +16,6 @@ import logging
 import datetime
 import requests
 import threading
-import http.cookiejar
 from .message import Message
 from .. import config, text, util, exception, cloudflare
 
@@ -40,6 +39,8 @@ class Extractor():
 
         self._cookiefile = None
         self._cookiejar = self.session.cookies
+        self._parentdir = ""
+        self._write_pages = self.config("write-pages", False)
         self._retries = self.config("retries", 4)
         self._timeout = self.config("timeout", 30)
         self._verify = self.config("verify", True)
@@ -78,6 +79,7 @@ class Extractor():
         session = self.session if session is None else session
         kwargs.setdefault("timeout", self._timeout)
         kwargs.setdefault("verify", self._verify)
+        response = None
 
         while True:
             try:
@@ -91,6 +93,8 @@ class Extractor():
                 raise exception.HttpError(exc)
             else:
                 code = response.status_code
+                if self._write_pages:
+                    self._dump_response(response)
                 if 200 <= code < 400 or fatal is None and \
                         (400 <= code < 500) or not fatal and \
                         (400 <= code < 429 or 431 <= code < 500):
@@ -99,18 +103,20 @@ class Extractor():
                     return response
                 if notfound and code == 404:
                     raise exception.NotFoundError(notfound)
+
+                reason = response.reason
                 if cloudflare.is_challenge(response):
                     self.log.info("Solving Cloudflare challenge")
                     response, domain, cookies = cloudflare.solve_challenge(
                         session, response, kwargs)
-                    if response.status_code >= 400:
-                        continue
-                    cloudflare.cookies.update(self.category, (domain, cookies))
-                    return response
+                    if cookies:
+                        cloudflare.cookies.update(
+                            self.category, (domain, cookies))
+                        return response
                 if cloudflare.is_captcha(response):
                     self.log.warning("Cloudflare CAPTCHA")
 
-                msg = "'{} {}' for '{}'".format(code, response.reason, url)
+                msg = "'{} {}' for '{}'".format(code, reason, url)
                 if code < 500 and code != 429 and code != 430:
                     break
 
@@ -120,7 +126,35 @@ class Extractor():
             time.sleep(min(2 ** (tries-1), 1800))
             tries += 1
 
-        raise exception.HttpError(msg)
+        raise exception.HttpError(msg, response)
+
+    def wait(self, *, seconds=None, until=None, adjust=1.0,
+             reason="rate limit reset"):
+        now = time.time()
+
+        if seconds:
+            seconds = float(seconds)
+            until = now + seconds
+        elif until:
+            if isinstance(until, datetime.datetime):
+                # convert to UTC timestamp
+                epoch = datetime.datetime(1970, 1, 1)
+                until = (until - epoch) / datetime.timedelta(0, 1)
+            else:
+                until = float(until)
+            seconds = until - now
+        else:
+            raise ValueError("Either 'seconds' or 'until' is required")
+
+        seconds += adjust
+        if seconds <= 0.0:
+            return
+
+        if reason:
+            t = datetime.datetime.fromtimestamp(until).time()
+            isotime = "{:02}:{:02}:{:02}".format(t.hour, t.minute, t.second)
+            self.log.info("Waiting until %s for %s.", isotime, reason)
+        time.sleep(seconds)
 
     def _get_auth_info(self):
         """Return authentication information as (username, password) tuple"""
@@ -170,19 +204,22 @@ class Extractor():
 
     def _init_cookies(self):
         """Populate the session's cookiejar"""
+        if self.cookiedomain is None:
+            return
+
         cookies = self.config("cookies")
         if cookies:
             if isinstance(cookies, dict):
                 self._update_cookies_dict(cookies, self.cookiedomain)
             elif isinstance(cookies, str):
                 cookiefile = util.expand_path(cookies)
-                cookiejar = http.cookiejar.MozillaCookieJar()
                 try:
-                    cookiejar.load(cookiefile)
-                except OSError as exc:
+                    with open(cookiefile) as fp:
+                        cookies = util.load_cookiestxt(fp)
+                except Exception as exc:
                     self.log.warning("cookies: %s", exc)
                 else:
-                    self._cookiejar.update(cookiejar)
+                    self._update_cookies(cookies)
                     self._cookiefile = cookiefile
             else:
                 self.log.warning(
@@ -197,11 +234,9 @@ class Extractor():
     def _store_cookies(self):
         """Store the session's cookiejar in a cookies.txt file"""
         if self._cookiefile and self.config("cookies-update", True):
-            cookiejar = http.cookiejar.MozillaCookieJar()
-            for cookie in self._cookiejar:
-                cookiejar.set_cookie(cookie)
             try:
-                cookiejar.save(self._cookiefile)
+                with open(self._cookiefile, "w") as fp:
+                    util.save_cookiestxt(fp, self._cookiejar)
             except OSError as exc:
                 self.log.warning("cookies: %s", exc)
 
@@ -227,14 +262,23 @@ class Extractor():
 
     def _check_cookies(self, cookienames, *, domain=None):
         """Check if all 'cookienames' are in the session's cookiejar"""
+        if not self._cookiejar:
+            return False
+
         if domain is None:
             domain = self.cookiedomain
-        try:
-            for name in cookienames:
-                self._cookiejar._find(name, domain)
-        except KeyError:
-            return False
-        return True
+        names = set(cookienames)
+        now = time.time()
+
+        for cookie in self._cookiejar:
+            if cookie.name in names and cookie.domain == domain:
+                if cookie.expires and cookie.expires < now:
+                    self.log.warning("Cookie '%s' has expired", cookie.name)
+                else:
+                    names.discard(cookie.name)
+                    if not names:
+                        return True
+        return False
 
     def _get_date_min_max(self, dmin=None, dmax=None):
         """Retrieve and parse 'date-min' and 'date-max' config values"""
@@ -285,6 +329,35 @@ class Extractor():
                 test = (test, None)
             yield test
 
+    def _dump_response(self, response, history=True):
+        """Write the response content to a .dump file in the current directory.
+
+        The file name is derived from the response url,
+        replacing special characters with "_"
+        """
+        if history:
+            for resp in response.history:
+                self._dump_response(resp, False)
+
+        if hasattr(Extractor, "_dump_index"):
+            Extractor._dump_index += 1
+        else:
+            Extractor._dump_index = 1
+            Extractor._dump_sanitize = re.compile(r"[\\\\|/<>:\"?*&=#]+").sub
+
+        fname = "{:>02}_{}".format(
+            Extractor._dump_index,
+            Extractor._dump_sanitize('_', response.url)
+        )[:250]
+
+        try:
+            with open(fname + ".dump", 'wb') as fp:
+                util.dump_response(
+                    response, fp, headers=(self._write_pages == "all"))
+        except Exception as e:
+            self.log.warning("Failed to dump HTTP request (%s: %s)",
+                             e.__class__.__name__, e)
+
 
 class GalleryExtractor(Extractor):
 
@@ -300,7 +373,7 @@ class GalleryExtractor(Extractor):
 
     def items(self):
         self.login()
-        page = self.request(self.gallery_url).text
+        page = self.request(self.gallery_url, notfound=self.subcategory).text
         data = self.metadata(page)
         imgs = self.images(page)
 
@@ -321,7 +394,11 @@ class GalleryExtractor(Extractor):
         for data[self.enum], (url, imgdata) in images:
             if imgdata:
                 data.update(imgdata)
-            yield Message.Url, url, text.nameext_from_url(url, data)
+                if "extension" not in imgdata:
+                    text.nameext_from_url(url, data)
+            else:
+                text.nameext_from_url(url, data)
+            yield Message.Url, url, data
 
     def login(self):
         """Login and set necessary cookies"""
@@ -416,10 +493,13 @@ class SharedConfigMixin():
     """Enable sharing of config settings based on 'basecategory'"""
     basecategory = ""
 
-    def config(self, key, default=None, *, sentinel=object()):
-        value = Extractor.config(self, key, sentinel)
-        return value if value is not sentinel else config.interpolate(
-            ("extractor", self.basecategory, self.subcategory), key, default)
+    def config(self, key, default=None):
+        return config.interpolate_common(
+            ("extractor",), (
+                (self.category, self.subcategory),
+                (self.basecategory, self.subcategory),
+            ), key, default,
+        )
 
 
 def generate_extractors(extractor_data, symtable, classes):
@@ -462,12 +542,6 @@ def generate_extractors(extractor_data, symtable, classes):
                 setattr(Extr, ckey, prev)
 
             symtable[Extr.__name__] = prev = Extr
-
-
-# Reduce strictness of the expected magic string in cookiejar files.
-# (This allows the use of Wget-generated cookiejars without modification)
-http.cookiejar.MozillaCookieJar.magic_re = re.compile(
-    "#( Netscape)? HTTP Cookie File", re.IGNORECASE)
 
 
 # Undo automatic pyOpenSSL injection by requests

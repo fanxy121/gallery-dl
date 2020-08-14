@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-# Copyright 2018 Mike Fährmann
+# Copyright 2018-2020 Mike Fährmann
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
 # published by the Free Software Foundation.
 
+import os
+import sys
 import unittest
 
-from gallery_dl import oauth, text
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from gallery_dl import oauth, text  # noqa E402
 
 TESTSERVER = "http://term.ie/oauth/example"
 CONSUMER_KEY = "key"
@@ -92,12 +95,19 @@ class TestOAuthSession(unittest.TestCase):
 
     def _oauth_request(self, endpoint, params=None,
                        oauth_token=None, oauth_token_secret=None):
+        # the test server at 'term.ie' is unreachable
+        raise unittest.SkipTest()
+
         session = oauth.OAuth1Session(
             CONSUMER_KEY, CONSUMER_SECRET,
             oauth_token, oauth_token_secret,
         )
-        url = TESTSERVER + endpoint
-        return session.get(url, params=params).text
+        try:
+            response = session.get(TESTSERVER + endpoint, params=params)
+            response.raise_for_status()
+            return response.text
+        except OSError:
+            raise unittest.SkipTest()
 
 
 if __name__ == "__main__":

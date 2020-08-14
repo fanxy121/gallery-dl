@@ -9,7 +9,7 @@
 """Extract images from https://www.myportfolio.com/"""
 
 from .common import Extractor, Message
-from .. import text
+from .. import text, exception
 
 
 class MyportfolioGalleryExtractor(Extractor):
@@ -23,18 +23,23 @@ class MyportfolioGalleryExtractor(Extractor):
                r"(?:https?://)?([^.]+\.myportfolio\.com))"
                r"(/[^/?&#]+)?")
     test = (
-        ("https://hannahcosgrove.myportfolio.com/niamh-1", {
-            "url": "8cbd73a73e5bf3b4f5d1b1d4a1eb114c01a72a66",
-            "keyword": "7a460bb5641e648ae70702ff91c2fb11054b0e0b",
+        ("https://andrewling.myportfolio.com/volvo-xc-90-hybrid", {
+            "url": "acea0690c76db0e5cf267648cefd86e921bc3499",
+            "keyword": "6ac6befe2ee0af921d24cf1dd4a4ed71be06db6d",
         }),
-        ("https://hannahcosgrove.myportfolio.com/lfw", {
-            "pattern": r"https://hannahcosgrove\.myportfolio\.com/[^/?&#+]+$",
-            "count": ">= 8",
+        ("https://andrewling.myportfolio.com/", {
+            "pattern": r"https://andrewling\.myportfolio\.com/[^/?&#+]+$",
+            "count": ">= 6",
         }),
+        ("https://stevenilousphotography.myportfolio.com/society", {
+            "exception": exception.NotFoundError,
+        }),
+        # custom domain
         ("myportfolio:https://tooco.com.ar/6-of-diamonds-paradise-bird", {
             "count": 3,
         }),
         ("myportfolio:https://tooco.com.ar/", {
+            "pattern": pattern,
             "count": ">= 40",
         }),
     )
@@ -80,8 +85,13 @@ class MyportfolioGalleryExtractor(Extractor):
         title, pos = text.extract(
             page, '<h1 ', '</h1>', pos)
 
-        title = title.partition(">")[2]
-        user = user[:-len(title)-3]
+        if title:
+            title = title.partition(">")[2]
+            user = user[:-len(title)-3]
+        elif user:
+            user, _, title = user.partition(" - ")
+        else:
+            raise exception.NotFoundError()
 
         return {
             "user": text.unescape(user),
